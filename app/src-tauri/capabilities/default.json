@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "cyan 默认窗口权限",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:event:default", "core:window:default"]
+}

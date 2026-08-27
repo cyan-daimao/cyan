@@ -1,0 +1,153 @@
+//! cyan lib：模块导出与 Tauri Builder 装配（main.rs 调 `cyan_lib::run()`）。
+
+pub mod adapter;
+pub mod application;
+pub mod domain;
+pub mod error;
+pub mod infra;
+
+use std::sync::Arc;
+
+use tauri::Manager;
+
+use adapter::command::{
+    agent_command, config_command, file_command, project_command, session_command,
+};
+use adapter::event::TauriEventSink;
+use application::agent_service::{AgentService, AgentServiceImpl};
+use application::config_service::{ConfigService, ConfigServiceImpl};
+use application::project_service::{ProjectService, ProjectServiceImpl};
+use application::session_service::{SessionService, SessionServiceImpl};
+use domain::agent::{CheckpointGateway, LlmGateway, RunEventSink, ToolExecutor};
+use domain::config::{McpRepository, ModelRepository, PermRuleRepository};
+use domain::project::ProjectRepository;
+use domain::session::{MessageRepository, SessionRepository};
+use infra::db::checkpoint_repo::CheckpointRepositoryImpl;
+use infra::db::mcp_repo::McpRepositoryImpl;
+use infra::db::model_repo::ModelRepositoryImpl;
+use infra::db::perm_rule_repo::PermRuleRepositoryImpl;
+use infra::db::project_repo::ProjectRepositoryImpl;
+use infra::db::session_repo::{MessageRepositoryImpl, SessionRepositoryImpl};
+use infra::git::GitCheckpointGateway;
+use infra::llm::OpenAiClient;
+use infra::tools::BuiltinToolExecutor;
+
+/// 初始化 tracing：按天滚动写 `~/.cyan/logs/cyan.log.YYYY-MM-DD`
+fn init_tracing() {
+    let log_dir = infra::db::datasource::cyan_home()
+        .map(|h| h.join("logs"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "cyan.log");
+    let (writer, guard) = tracing_appender::non_blocking(file_appender);
+    // guard 需存活整个进程：主动泄漏（进程退出时随内存回收，日志已随 drop 语义之外的 flush 写出）
+    std::mem::forget(guard);
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(writer)
+        .with_ansi(false)
+        .init();
+}
+
+/// 启动 Tauri 应用
+pub fn run() {
+    tauri::Builder::default()
+        .setup(|app| {
+            init_tracing();
+            tracing::info!("cyan 启动，初始化数据库");
+            let pool = tauri::async_runtime::block_on(infra::db::datasource::init_pool())
+                .map_err(|e| format!("数据库初始化失败：{e}"))?;
+
+            // infra → Repository 实现
+            let session_repo: Arc<dyn SessionRepository> =
+                Arc::new(SessionRepositoryImpl::new(pool.clone()));
+            let message_repo: Arc<dyn MessageRepository> =
+                Arc::new(MessageRepositoryImpl::new(pool.clone()));
+            let project_repo: Arc<dyn ProjectRepository> =
+                Arc::new(ProjectRepositoryImpl::new(pool.clone()));
+            let model_repo: Arc<dyn ModelRepository> =
+                Arc::new(ModelRepositoryImpl::new(pool.clone()));
+            let mcp_repo: Arc<dyn McpRepository> = Arc::new(McpRepositoryImpl::new(pool.clone()));
+            let perm_repo: Arc<dyn PermRuleRepository> =
+                Arc::new(PermRuleRepositoryImpl::new(pool.clone()));
+            let checkpoint_repo = Arc::new(CheckpointRepositoryImpl::new(pool));
+
+            // infra → 端口实现
+            let llm: Arc<dyn LlmGateway> = Arc::new(OpenAiClient::new());
+            let executor: Arc<dyn ToolExecutor> = Arc::new(BuiltinToolExecutor);
+            let checkpoint_gateway: Arc<dyn CheckpointGateway> = Arc::new(GitCheckpointGateway);
+            let sink: Arc<dyn RunEventSink> =
+                Arc::new(TauriEventSink::new(app.handle().clone()));
+
+            // application 服务装配（Arc<dyn Service> 注入 adapter）
+            let session_service: Arc<dyn SessionService> = Arc::new(SessionServiceImpl::new(
+                session_repo.clone(),
+                message_repo.clone(),
+                project_repo.clone(),
+            ));
+            let project_service: Arc<dyn ProjectService> =
+                Arc::new(ProjectServiceImpl::new(project_repo.clone()));
+            let config_service: Arc<dyn ConfigService> = Arc::new(ConfigServiceImpl::new(
+                model_repo.clone(),
+                mcp_repo,
+                perm_repo.clone(),
+            ));
+            let agent_service: Arc<dyn AgentService> = Arc::new(AgentServiceImpl::new(
+                session_repo,
+                message_repo,
+                project_repo,
+                checkpoint_repo,
+                perm_repo,
+                model_repo,
+                llm,
+                executor,
+                checkpoint_gateway,
+                sink,
+            ));
+
+            app.manage(session_service);
+            app.manage(project_service);
+            app.manage(config_service);
+            app.manage(agent_service);
+            tracing::info!("cyan 初始化完成");
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            // 会话
+            session_command::list_sessions,
+            session_command::get_session,
+            session_command::create_session,
+            session_command::delete_session,
+            // Agent
+            agent_command::send_task,
+            agent_command::interrupt_run,
+            agent_command::approve,
+            agent_command::rollback_change,
+            // 项目
+            project_command::list_projects,
+            project_command::open_project,
+            project_command::create_project,
+            // 文件
+            file_command::file_tree,
+            file_command::file_preview,
+            // 模型配置
+            config_command::list_models,
+            config_command::save_model,
+            config_command::delete_model,
+            config_command::set_default_model,
+            // MCP
+            config_command::list_mcp_servers,
+            config_command::save_mcp_server,
+            config_command::toggle_mcp_server,
+            config_command::delete_mcp_server,
+            // 权限规则
+            config_command::list_perm_rules,
+            config_command::save_perm_rule,
+            config_command::delete_perm_rule,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running cyan application");
+}

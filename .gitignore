@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# 前端
+node_modules/
+app/dist/
+
+# Rust
+app/src-tauri/target/
+
+# 打包产物（本地构建输出，不入库）
+bin/

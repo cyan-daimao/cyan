@@ -1,0 +1,223 @@
+//! AgentService 实现：任务编排、审批流转、中断与回滚。
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+
+use crate::domain::agent::{
+    AgentRun, ApprovalDecision, CheckpointGateway, CheckpointRepository, LlmGateway, PermMode,
+    RunEventSink, ToolExecutor,
+};
+use crate::domain::config::{ModelRepository, PermRuleRepository, PermissionRule};
+use crate::domain::project::ProjectRepository;
+use crate::domain::session::{Message, MessageKind, MessageRepository, SessionRepository};
+use crate::domain::shared::ProjectPath;
+use crate::error::ServiceError;
+use crate::infra::db::now_local;
+use crate::infra::secret;
+
+use super::runner::{run_loop, RunContext};
+use super::{ApproveCmd, InterruptCmd, RollbackCmd, StartRunCmd};
+
+/// Agent 服务
+#[async_trait]
+pub trait AgentService: Send + Sync {
+    /// 发起 Agent 任务（结果走 `agent:event` 事件）
+    async fn start_run(&self, cmd: StartRunCmd) -> Result<(), ServiceError>;
+    /// 中断当前运行（幂等）
+    async fn interrupt(&self, cmd: InterruptCmd) -> Result<(), ServiceError>;
+    /// 审批（幂等：重复审批返回已决断）
+    async fn approve(&self, cmd: ApproveCmd) -> Result<(), ServiceError>;
+    /// checkpoint 回滚（幂等）
+    async fn rollback_change(&self, cmd: RollbackCmd) -> Result<(), ServiceError>;
+}
+
+/// Agent 服务实现
+pub struct AgentServiceImpl {
+    ctx: RunContext,
+    session_repo: Arc<dyn SessionRepository>,
+    message_repo: Arc<dyn MessageRepository>,
+    project_repo: Arc<dyn ProjectRepository>,
+    model_repo: Arc<dyn ModelRepository>,
+    checkpoint_repo: Arc<dyn CheckpointRepository>,
+    checkpoint_gateway: Arc<dyn CheckpointGateway>,
+    /// 运行表（session_id → AgentRun，内存态不持久化）
+    runs: Arc<Mutex<HashMap<i64, Arc<AgentRun>>>>,
+}
+
+impl AgentServiceImpl {
+    /// 构造
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        session_repo: Arc<dyn SessionRepository>,
+        message_repo: Arc<dyn MessageRepository>,
+        project_repo: Arc<dyn ProjectRepository>,
+        checkpoint_repo: Arc<dyn CheckpointRepository>,
+        perm_repo: Arc<dyn PermRuleRepository>,
+        model_repo: Arc<dyn ModelRepository>,
+        llm: Arc<dyn LlmGateway>,
+        executor: Arc<dyn ToolExecutor>,
+        checkpoint_gateway: Arc<dyn CheckpointGateway>,
+        sink: Arc<dyn RunEventSink>,
+    ) -> Self {
+        let ctx = RunContext {
+            session_repo: session_repo.clone(),
+            message_repo: message_repo.clone(),
+            checkpoint_repo: checkpoint_repo.clone(),
+            perm_repo,
+            llm,
+            executor,
+            sink,
+        };
+        Self {
+            ctx,
+            session_repo,
+            message_repo,
+            project_repo,
+            model_repo,
+            checkpoint_repo,
+            checkpoint_gateway,
+            runs: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// 查找会话的活跃运行
+    fn active_run(&self, session_id: i64) -> Option<Arc<AgentRun>> {
+        self.runs
+            .lock()
+            .expect("runs 锁中毒")
+            .get(&session_id)
+            .cloned()
+    }
+}
+
+#[async_trait]
+impl AgentService for AgentServiceImpl {
+    async fn start_run(&self, cmd: StartRunCmd) -> Result<(), ServiceError> {
+        if cmd.text.trim().is_empty() {
+            return Err(ServiceError::validation("任务文本不能为空"));
+        }
+        // 校验会话存在 + idle
+        let mut session = self
+            .session_repo
+            .find_by_id(cmd.session_id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found(format!("会话不存在：{}", cmd.session_id)))?;
+        if let Some(existing) = self.active_run(cmd.session_id) {
+            if existing.state() != crate::domain::agent::RunState::Idle {
+                return Err(ServiceError::conflict("当前会话已有运行中的任务"));
+            }
+        }
+        // 校验项目存在
+        let project = self
+            .project_repo
+            .find_by_id(session.project_id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found("会话所属项目不存在"))?;
+        let root = ProjectPath::new(&project.path)?;
+        // 解析模型与 API Key
+        let model = if cmd.model.trim().is_empty() {
+            self.model_repo.find_default().await?
+        } else {
+            self.model_repo.find_by_name(cmd.model.trim()).await?
+        }
+        .ok_or_else(|| ServiceError::not_found("模型配置不存在，请先在设置中配置模型"))?;
+        let api_key = secret::load_api_key(&model.name)
+            .map_err(|_| ServiceError::validation(format!("模型 {} 未配置 API Key", model.name)))?;
+        let mode = PermMode::parse(&cmd.perm_mode);
+        let rules = self.ctx.perm_repo.list().await?;
+
+        // 首条任务生成标题 + 用户消息落库
+        session.apply_first_task_title(&cmd.text);
+        session.messages = self.message_repo.list_by_session(session.id).await?;
+        let mut user_msg = session
+            .append_message(Message::new(
+                session.id,
+                MessageKind::User,
+                Message::text_payload(cmd.text.trim()),
+                now_local(),
+            ))
+            .clone();
+        self.message_repo.insert(&mut user_msg).await?;
+        self.session_repo.update(&session).await?;
+
+        // 启动运行
+        let run = Arc::new(AgentRun::new(session.id));
+        run.start()?;
+        self.runs
+            .lock()
+            .expect("runs 锁中毒")
+            .insert(session.id, run.clone());
+        let runs = self.runs.clone();
+        let ctx = self.ctx.clone();
+        let run_clone = run.clone();
+        let session_id = session.id;
+        tokio::spawn(async move {
+            run_loop(ctx, run_clone, session, root, model, api_key, rules, mode).await;
+            runs.lock().expect("runs 锁中毒").remove(&session_id);
+        });
+        Ok(())
+    }
+
+    async fn interrupt(&self, cmd: InterruptCmd) -> Result<(), ServiceError> {
+        // 幂等：无活跃运行直接返回
+        if let Some(run) = self.active_run(cmd.session_id) {
+            run.interrupt();
+        }
+        Ok(())
+    }
+
+    async fn approve(&self, cmd: ApproveCmd) -> Result<(), ServiceError> {
+        let decision = ApprovalDecision::parse(&cmd.decision)
+            .ok_or_else(|| ServiceError::validation(format!("非法审批决断：{}", cmd.decision)))?;
+        let Some(run) = self.active_run(cmd.session_id) else {
+            return Err(ServiceError::not_found("当前会话没有运行中的任务"));
+        };
+        // 幂等：callId 不存在（已决断）时返回 None，视为已决断
+        let Some((tool, arg)) = run.approve(&cmd.call_id, decision) else {
+            return Ok(());
+        };
+        // 「总是允许」自动推导规则落库（upsert by tool+pattern）
+        if decision == ApprovalDecision::Always {
+            let mut rule = PermissionRule::always_allow_from(&tool, &arg);
+            match self
+                .ctx
+                .perm_repo
+                .find_by_tool_pattern(&rule.tool, &rule.pattern)
+                .await?
+            {
+                Some(_) => {}
+                None => self.ctx.perm_repo.insert(&mut rule).await?,
+            }
+        }
+        Ok(())
+    }
+
+    async fn rollback_change(&self, cmd: RollbackCmd) -> Result<(), ServiceError> {
+        let checkpoint = self
+            .checkpoint_repo
+            .find_by_id(cmd.change_id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found(format!("变更不存在：{}", cmd.change_id)))?;
+        // 幂等：已回滚直接返回
+        if checkpoint.rolled_back {
+            return Ok(());
+        }
+        let session = self
+            .session_repo
+            .find_by_id(checkpoint.session_id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found("变更所属会话不存在"))?;
+        let project = self
+            .project_repo
+            .find_by_id(session.project_id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found("变更所属项目不存在"))?;
+        let root = ProjectPath::new(&project.path)?;
+        self.checkpoint_gateway
+            .rollback(root.root(), &checkpoint.git_ref, &checkpoint.file_path)?;
+        self.checkpoint_repo.mark_rolled_back(cmd.change_id).await?;
+        Ok(())
+    }
+}

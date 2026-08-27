@@ -1,0 +1,205 @@
+//! 会话相关 Request / DTO。
+
+use serde::{Deserialize, Serialize};
+
+use crate::application::session_service::{
+    CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery, MessageBO, SessionBO,
+    SessionSummaryBO,
+};
+use crate::infra::db::fmt_time;
+
+/// list_sessions 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSessionRequest {
+    /// 项目路径
+    pub project_path: String,
+    /// 标题关键字（可选）
+    pub keyword: Option<String>,
+}
+
+impl From<ListSessionRequest> for ListSessionQuery {
+    fn from(r: ListSessionRequest) -> Self {
+        Self {
+            project_path: r.project_path,
+            keyword: r.keyword,
+        }
+    }
+}
+
+/// get_session 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSessionRequest {
+    /// 会话 id
+    pub session_id: i64,
+}
+
+impl From<GetSessionRequest> for GetSessionQuery {
+    fn from(r: GetSessionRequest) -> Self {
+        Self {
+            session_id: r.session_id,
+        }
+    }
+}
+
+/// create_session 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSessionRequest {
+    /// 项目路径
+    pub project_path: String,
+}
+
+impl From<CreateSessionRequest> for CreateSessionCmd {
+    fn from(r: CreateSessionRequest) -> Self {
+        Self {
+            project_path: r.project_path,
+        }
+    }
+}
+
+/// delete_session 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSessionRequest {
+    /// 会话 id
+    pub session_id: i64,
+}
+
+impl From<DeleteSessionRequest> for DeleteSessionCmd {
+    fn from(r: DeleteSessionRequest) -> Self {
+        Self {
+            session_id: r.session_id,
+        }
+    }
+}
+
+/// token 统计 DTO
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenStatDTO {
+    /// 累计输入 token
+    pub input: i64,
+    /// 累计输出 token
+    pub output: i64,
+}
+
+/// 会话摘要 DTO（列表项）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSummaryDTO {
+    /// 会话 id
+    pub id: i64,
+    /// 标题
+    pub title: String,
+    /// 时间分组（今天/昨天/本周/更早）
+    pub group: String,
+    /// 上下文占用百分比
+    pub ctx: i64,
+    /// token 统计
+    pub tokens: TokenStatDTO,
+    /// 创建时间（YYYY-MM-DD HH:MM:SS）
+    pub created_at: String,
+    /// 更新时间
+    pub updated_at: String,
+}
+
+/// 按本地日期分组
+fn time_group(t: &chrono::NaiveDateTime) -> String {
+    let today = chrono::Local::now().date_naive();
+    let date = t.date();
+    let days = (today - date).num_days();
+    match days {
+        0 => "今天",
+        1 => "昨天",
+        2..=6 => "本周",
+        _ => "更早",
+    }
+    .to_string()
+}
+
+impl From<SessionSummaryBO> for SessionSummaryDTO {
+    fn from(bo: SessionSummaryBO) -> Self {
+        Self {
+            id: bo.id,
+            title: bo.title,
+            group: time_group(&bo.updated_at),
+            ctx: bo.ctx_percent,
+            tokens: TokenStatDTO {
+                input: bo.input_tokens,
+                output: bo.output_tokens,
+            },
+            created_at: fmt_time(&bo.created_at),
+            updated_at: fmt_time(&bo.updated_at),
+        }
+    }
+}
+
+/// 消息 DTO
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageDTO {
+    /// 消息 id
+    pub id: i64,
+    /// 会话内序号
+    pub seq: i64,
+    /// 消息类型
+    pub kind: String,
+    /// 载荷（JSON 结构，前端按 kind 渲染）
+    pub payload: serde_json::Value,
+    /// 创建时间
+    pub created_at: String,
+}
+
+impl From<MessageBO> for MessageDTO {
+    fn from(bo: MessageBO) -> Self {
+        Self {
+            id: bo.id,
+            seq: bo.seq,
+            kind: bo.kind,
+            payload: serde_json::from_str(&bo.payload).unwrap_or(serde_json::Value::Null),
+            created_at: fmt_time(&bo.created_at),
+        }
+    }
+}
+
+/// 会话详情 DTO
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDTO {
+    /// 会话 id
+    pub id: i64,
+    /// 所属项目 id
+    pub project_id: i64,
+    /// 标题
+    pub title: String,
+    /// 上下文占用百分比
+    pub ctx: i64,
+    /// token 统计
+    pub tokens: TokenStatDTO,
+    /// 消息列表
+    pub messages: Vec<MessageDTO>,
+    /// 创建时间
+    pub created_at: String,
+    /// 更新时间
+    pub updated_at: String,
+}
+
+impl From<SessionBO> for SessionDTO {
+    fn from(bo: SessionBO) -> Self {
+        Self {
+            id: bo.id,
+            project_id: bo.project_id,
+            title: bo.title,
+            ctx: bo.ctx_percent,
+            tokens: TokenStatDTO {
+                input: bo.input_tokens,
+                output: bo.output_tokens,
+            },
+            messages: bo.messages.into_iter().map(MessageDTO::from).collect(),
+            created_at: fmt_time(&bo.created_at),
+            updated_at: fmt_time(&bo.updated_at),
+        }
+    }
+}

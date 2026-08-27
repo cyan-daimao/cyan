@@ -1,0 +1,2029 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cyan — AI 编程 Agent 原型</title>
+<style>
+  :root {
+    --primary: #1677ff;
+    --primary-hover: #4096ff;
+    --success: #52c41a;
+    --warning: #faad14;
+    --error: #ff4d4f;
+    --text: rgba(0,0,0,.88);
+    --text-2: rgba(0,0,0,.65);
+    --text-3: rgba(0,0,0,.45);
+    --border: #d9d9d9;
+    --border-light: #f0f0f0;
+    --bg: #ffffff;
+    --bg-layout: #f5f5f5;
+    --bg-hover: rgba(0,0,0,.04);
+    --bg-active: #e6f4ff;
+    --code-bg: #0d1117;
+    --radius: 6px;
+    --shadow: 0 6px 16px 0 rgba(0,0,0,.08), 0 3px 6px -4px rgba(0,0,0,.12), 0 9px 28px 8px rgba(0,0,0,.05);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 14px; color: var(--text); background: var(--bg-layout);
+    overflow: hidden;
+  }
+  code, pre, .mono { font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace; }
+
+  /* ============ 通用组件 ============ */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 32px; padding: 0 15px; border-radius: var(--radius); border: 1px solid var(--border);
+    background: #fff; color: var(--text); font-size: 14px; cursor: pointer; user-select: none;
+    transition: all .2s; white-space: nowrap;
+  }
+  .btn:hover { color: var(--primary); border-color: var(--primary); }
+  .btn:disabled { color: var(--text-3); background: rgba(0,0,0,.04); border-color: var(--border); cursor: not-allowed; }
+  .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: #fff; }
+  .btn-primary:disabled { background: rgba(0,0,0,.04); color: var(--text-3); border-color: var(--border); }
+  .btn-danger { color: var(--error); border-color: var(--error); }
+  .btn-danger:hover { color: #fff; background: var(--error); border-color: var(--error); }
+  .btn-text { border-color: transparent; background: transparent; box-shadow: none; }
+  .btn-text:hover { background: var(--bg-hover); }
+  .btn-sm { height: 24px; padding: 0 8px; font-size: 12px; }
+  .btn-link { border: none; background: none; color: var(--primary); padding: 0 4px; height: auto; cursor: pointer; font-size: 14px; }
+  .btn-link:hover { color: var(--primary-hover); }
+  .btn-link.danger { color: var(--error); }
+  .btn-link:disabled { color: var(--text-3); cursor: not-allowed; }
+  .btn .spinner, .spinner {
+    display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.4);
+    border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  .spinner.dark { border-color: rgba(0,0,0,.15); border-top-color: var(--primary); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .input, .select, textarea.input {
+    width: 100%; height: 32px; padding: 4px 11px; border: 1px solid var(--border);
+    border-radius: var(--radius); font-size: 14px; color: var(--text); background: #fff;
+    transition: all .2s; outline: none;
+  }
+  textarea.input { height: auto; resize: vertical; line-height: 1.5; }
+  .input:hover, .select:hover { border-color: var(--primary); }
+  .input:focus, .select:focus, textarea.input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(5,145,255,.1); }
+  .input.error, .select.error { border-color: var(--error); }
+  .field-error { color: var(--error); font-size: 12px; margin-top: 4px; min-height: 18px; }
+  select.select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; padding-right: 28px; }
+
+  .tag {
+    display: inline-flex; align-items: center; height: 22px; padding: 0 8px; font-size: 12px;
+    border-radius: 4px; border: 1px solid; line-height: 20px; white-space: nowrap;
+  }
+  .tag-blue { color: #0958d9; background: #e6f4ff; border-color: #91caff; }
+  .tag-green { color: #237804; background: #f6ffed; border-color: #b7eb8f; }
+  .tag-red { color: #cf1322; background: #fff1f0; border-color: #ffa39e; }
+  .tag-orange { color: #ad4e00; background: #fff7e6; border-color: #ffd591; }
+  .tag-default { color: var(--text-2); background: #fafafa; border-color: var(--border); }
+  .tag-purple { color: #531dab; background: #f9f0ff; border-color: #d3adf7; }
+
+  /* Toast */
+  #toast-wrap { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 3000; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast {
+    padding: 9px 16px; background: #fff; border-radius: 8px; box-shadow: var(--shadow);
+    display: flex; align-items: center; gap: 8px; font-size: 14px; animation: toastIn .3s;
+  }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: none; } }
+  .toast.out { opacity: 0; transform: translateY(-12px); transition: all .3s; }
+  .toast .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .toast.success .dot { background: var(--success); }
+  .toast.error .dot { background: var(--error); }
+  .toast.warning .dot { background: var(--warning); }
+  .toast.info .dot { background: var(--primary); }
+
+  /* Modal */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1000;
+    display: none; align-items: center; justify-content: center; padding: 24px;
+  }
+  .modal-mask.open { display: flex; }
+  .modal {
+    background: #fff; border-radius: 8px; box-shadow: var(--shadow); width: 520px; max-width: 100%;
+    max-height: calc(100vh - 64px); display: flex; flex-direction: column; animation: modalIn .25s;
+  }
+  .modal.lg { width: 860px; }
+  @keyframes modalIn { from { opacity: 0; transform: scale(.96) translateY(8px); } to { opacity: 1; transform: none; } }
+  .modal-header { padding: 16px 24px; border-bottom: 1px solid var(--border-light); display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-size: 16px; font-weight: 600; }
+  .modal-close { border: none; background: none; font-size: 18px; color: var(--text-3); cursor: pointer; width: 28px; height: 28px; border-radius: 4px; }
+  .modal-close:hover { background: var(--bg-hover); color: var(--text); }
+  .modal-body { padding: 24px; overflow-y: auto; flex: 1; }
+  .modal-footer { padding: 12px 24px; border-top: 1px solid var(--border-light); display: flex; justify-content: flex-end; gap: 8px; }
+  .form-item { margin-bottom: 4px; }
+  .form-label { display: block; margin-bottom: 6px; font-weight: 500; }
+  .form-label .req { color: var(--error); margin-right: 4px; }
+
+  /* Tabs */
+  .tabs { display: flex; border-bottom: 1px solid var(--border-light); gap: 4px; padding: 0 24px; }
+  .tab {
+    padding: 10px 16px; cursor: pointer; color: var(--text-2); border-bottom: 2px solid transparent;
+    margin-bottom: -1px; font-size: 14px; user-select: none;
+  }
+  .tab:hover { color: var(--primary); }
+  .tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; }
+  table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .table th { text-align: left; padding: 12px 16px; background: #fafafa; border-bottom: 1px solid var(--border-light); font-weight: 500; color: var(--text); white-space: nowrap; }
+  .table td { padding: 12px 16px; border-bottom: 1px solid var(--border-light); color: var(--text-2); }
+  .table tbody tr:hover td { background: #fafafa; }
+  .table .empty-cell { text-align: center; padding: 48px 0; color: var(--text-3); }
+
+  /* Pagination */
+  .pagination { display: flex; gap: 6px; justify-content: flex-end; margin-top: 16px; align-items: center; flex-wrap: wrap; }
+  .page-btn {
+    min-width: 32px; height: 32px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: #fff; cursor: pointer; font-size: 14px; color: var(--text);
+  }
+  .page-btn:hover { color: var(--primary); border-color: var(--primary); }
+  .page-btn.active { color: var(--primary); border-color: var(--primary); font-weight: 500; }
+  .page-btn:disabled { color: var(--text-3); cursor: not-allowed; background: rgba(0,0,0,.02); }
+  .page-total { color: var(--text-2); font-size: 13px; margin-right: 8px; }
+
+  /* ============ 布局 ============ */
+  #app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* Topbar */
+  .topbar {
+    height: 52px; background: #fff; border-bottom: 1px solid var(--border-light);
+    display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0; z-index: 10;
+  }
+  .logo { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
+  .logo-icon {
+    width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #1677ff, #722ed1);
+    color: #fff; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700;
+  }
+  .topbar .spacer { flex: 1; }
+  .project-chip {
+    display: inline-flex; align-items: center; gap: 7px; max-width: 300px; height: 32px; padding: 0 10px;
+    border: 1px solid var(--border); border-radius: var(--radius); background: #fff; cursor: pointer;
+    font-size: 13px; color: var(--text-2); transition: all .2s;
+  }
+  .project-chip:hover { border-color: var(--primary); color: var(--primary); }
+  .project-chip .p-name { font-weight: 600; color: var(--text); white-space: nowrap; }
+  .project-chip .p-path { color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .project-chip .p-caret { font-size: 10px; color: var(--text-3); flex-shrink: 0; }
+  .recent-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border-light);
+    border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: all .2s;
+  }
+  .recent-item:hover { border-color: var(--primary); background: var(--bg-active); }
+  .recent-item.current { border-color: var(--primary); background: var(--bg-active); }
+  .recent-item .r-icon { font-size: 18px; }
+  .recent-item .r-main { flex: 1; min-width: 0; }
+  .recent-item .r-name { font-weight: 600; font-size: 14px; }
+  .recent-item .r-path { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; color: var(--text-2); font-size: 14px; cursor: pointer; user-select: none; }
+  .topbar-select { width: 190px; }
+  .segmented { display: inline-flex; background: rgba(0,0,0,.04); border-radius: 8px; padding: 2px; gap: 2px; }
+  .segmented-item { padding: 3px 11px; font-size: 13px; border-radius: 6px; cursor: pointer; color: var(--text-2); border: none; background: none; transition: all .2s; }
+  .segmented-item.active { background: #fff; color: var(--text); box-shadow: 0 2px 8px -2px rgba(0,0,0,.05), 0 0 1px rgba(0,0,0,.1); font-weight: 500; }
+  .ctx-meter { display: flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 12px; }
+  .ctx-bar { width: 90px; height: 6px; border-radius: 3px; background: rgba(0,0,0,.06); overflow: hidden; }
+  .ctx-bar i { display: block; height: 100%; border-radius: 3px; background: var(--primary); transition: width .4s; }
+  .ctx-bar.warn i { background: var(--warning); }
+  .icon-btn {
+    width: 32px; height: 32px; border: none; background: none; border-radius: var(--radius);
+    cursor: pointer; color: var(--text-2); font-size: 16px; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .icon-btn.active { color: var(--primary); background: var(--bg-active); }
+
+  /* Body */
+  .body-wrap { display: flex; flex: 1; overflow: hidden; }
+
+  /* Sidebar */
+  .sidebar {
+    width: 264px; background: #fff; border-right: 1px solid var(--border-light);
+    display: flex; flex-direction: column; flex-shrink: 0; transition: margin-left .25s;
+  }
+  .sidebar.collapsed { margin-left: -264px; }
+  .sidebar-head { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .session-search { position: relative; }
+  .session-search .input { padding-left: 30px; }
+  .session-search::before { content: "🔍"; position: absolute; left: 9px; top: 50%; transform: translateY(-50%); font-size: 12px; opacity: .5; }
+  .session-list { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+  .session-group-label { font-size: 12px; color: var(--text-3); padding: 10px 8px 4px; }
+  .session-item {
+    padding: 8px 10px; border-radius: var(--radius); cursor: pointer; display: flex; align-items: center; gap: 6px;
+    color: var(--text-2);
+  }
+  .session-item:hover { background: var(--bg-hover); }
+  .session-item.active { background: var(--bg-active); color: var(--primary); }
+  .session-item .s-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .session-item .s-del { visibility: hidden; border: none; background: none; color: var(--text-3); cursor: pointer; font-size: 13px; padding: 2px 4px; border-radius: 4px; }
+  .session-item:hover .s-del { visibility: visible; }
+  .session-item .s-del:hover { color: var(--error); background: #fff1f0; }
+  .sidebar-foot { padding: 10px 12px; border-top: 1px solid var(--border-light); font-size: 12px; color: var(--text-3); display: flex; align-items: center; gap: 6px; }
+
+  /* Chat main */
+  .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: #fff; }
+  .chat-scroll { flex: 1; overflow-y: auto; padding: 24px 0; }
+  .chat-inner { max-width: 860px; margin: 0 auto; padding: 0 24px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* Empty state */
+  .empty-state { text-align: center; padding: 80px 24px; color: var(--text-3); }
+  .empty-state .big { font-size: 40px; margin-bottom: 12px; }
+  .empty-state h3 { color: var(--text-2); font-size: 18px; margin-bottom: 8px; }
+  .chips { display: flex; gap: 8px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
+  .chip {
+    padding: 6px 14px; border: 1px solid var(--border); border-radius: 16px; font-size: 13px;
+    color: var(--text-2); cursor: pointer; background: #fff; transition: all .2s;
+  }
+  .chip:hover { color: var(--primary); border-color: var(--primary); background: var(--bg-active); }
+
+  /* Messages */
+  .msg-user {
+    align-self: flex-end; max-width: 78%; background: var(--bg-active); border: 1px solid #91caff;
+    border-radius: 12px 12px 2px 12px; padding: 10px 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+  }
+  .msg-assistant { line-height: 1.75; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+  .msg-assistant .cursor { display: inline-block; width: 8px; height: 16px; background: var(--primary); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .msg-system { text-align: center; font-size: 12px; color: var(--text-3); display: flex; align-items: center; gap: 12px; }
+  .msg-system::before, .msg-system::after { content: ""; flex: 1; height: 1px; background: var(--border-light); }
+
+  /* Tool card */
+  .tool-card { border: 1px solid var(--border-light); border-radius: 8px; overflow: hidden; }
+  .tool-head {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #fafafa;
+    cursor: pointer; user-select: none; font-size: 13px;
+  }
+  .tool-head:hover { background: var(--bg-hover); }
+  .tool-icon { width: 22px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+  .tool-icon.read { background: #e6f4ff; } .tool-icon.bash { background: #f6ffed; }
+  .tool-icon.edit { background: #fff7e6; } .tool-icon.grep { background: #f9f0ff; }
+  .tool-name { font-weight: 600; }
+  .tool-arg { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .tool-status { margin-left: auto; flex-shrink: 0; }
+  .tool-caret { color: var(--text-3); font-size: 11px; transition: transform .2s; flex-shrink: 0; }
+  .tool-card.open .tool-caret { transform: rotate(90deg); }
+  .tool-body { display: none; border-top: 1px solid var(--border-light); }
+  .tool-card.open .tool-body { display: block; }
+  .tool-body pre {
+    background: var(--code-bg); color: #c9d1d9; padding: 12px 16px; font-size: 12.5px; line-height: 1.6;
+    overflow-x: auto; max-height: 280px; overflow-y: auto;
+  }
+  .tool-body .tool-note { padding: 8px 12px; font-size: 12px; color: var(--text-3); background: #fff; border-top: 1px solid var(--border-light); }
+  .tool-running { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; }
+
+  /* Diff */
+  .diff { font-size: 12.5px; line-height: 1.6; overflow-x: auto; background: var(--code-bg); padding: 12px 0; }
+  .diff-line { display: flex; padding: 0 16px; white-space: pre; color: #c9d1d9; }
+  .diff-line .ln { width: 34px; flex-shrink: 0; color: #6e7681; text-align: right; padding-right: 12px; user-select: none; }
+  .diff-line.add { background: rgba(46,160,67,.15); color: #aff5b4; }
+  .diff-line.del { background: rgba(248,81,73,.15); color: #ffb3ae; }
+  .diff-line.hunk { color: #79c0ff; }
+
+  /* Approval card */
+  .approval-card {
+    border: 1px solid #ffd591; background: #fffbe6; border-radius: 8px; padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .approval-title { display: flex; align-items: center; gap: 8px; font-weight: 600; color: #ad6800; }
+  .approval-cmd { background: rgba(0,0,0,.04); border-radius: 6px; padding: 8px 12px; font-size: 13px; }
+  .approval-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .approval-auto { font-size: 12px; color: #ad6800; display: flex; align-items: center; gap: 6px; }
+
+  /* Input area */
+  .input-area { border-top: 1px solid var(--border-light); padding: 14px 0 16px; flex-shrink: 0; }
+  .input-box { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+  .input-frame {
+    border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: #fff;
+    transition: border-color .2s; position: relative;
+  }
+  .input-frame:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(5,145,255,.08); }
+  .input-frame textarea {
+    width: 100%; border: none; outline: none; resize: none; font-size: 14px; line-height: 1.6;
+    font-family: inherit; color: var(--text); background: transparent; max-height: 140px;
+  }
+  .input-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .input-hint { font-size: 12px; color: var(--text-3); }
+  .send-btn {
+    width: 32px; height: 32px; border-radius: 50%; border: none; background: var(--primary); color: #fff;
+    cursor: pointer; font-size: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .send-btn:hover { background: var(--primary-hover); }
+  .send-btn:disabled { background: rgba(0,0,0,.1); cursor: not-allowed; }
+  .send-btn.stop { background: var(--text); }
+  .plan-banner {
+    max-width: 860px; margin: 0 auto 10px; padding: 8px 14px; border: 1px solid #d3adf7; background: #f9f0ff;
+    border-radius: 8px; font-size: 13px; color: #531dab; display: none; align-items: center; gap: 8px;
+  }
+  .plan-banner.show { display: flex; }
+
+  /* Right drawer */
+  .drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 900; display: none; }
+  .drawer-mask.open { display: block; }
+  .drawer {
+    position: fixed; top: 0; right: -420px; width: 400px; max-width: 92vw; height: 100vh; background: #fff;
+    z-index: 901; box-shadow: -6px 0 16px -8px rgba(0,0,0,.08); transition: right .25s; display: flex; flex-direction: column;
+  }
+  .drawer.open { right: 0; }
+  .drawer-header { padding: 16px 24px; border-bottom: 1px solid var(--border-light); display: flex; align-items: center; justify-content: space-between; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 16px 24px; }
+  .section-title { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 16px 0 10px; display: flex; align-items: center; gap: 8px; }
+  .section-title:first-child { margin-top: 0; }
+  .todo-item { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 14px; }
+  .todo-check {
+    width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 11px; color: #fff;
+  }
+  .todo-item.done .todo-check { background: var(--success); border-color: var(--success); }
+  .todo-item.done .todo-text { color: var(--text-3); text-decoration: line-through; }
+  .todo-item.doing .todo-check { border-color: var(--primary); }
+  .todo-item.doing .todo-check::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .change-item {
+    border: 1px solid var(--border-light); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 10px; font-size: 13px;
+  }
+  .change-item .f-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .diff-stat { font-size: 12px; flex-shrink: 0; }
+  .diff-stat .add { color: var(--success); } .diff-stat .del { color: var(--error); }
+
+  /* Settings modal content */
+  .settings-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap; }
+  .alert {
+    padding: 8px 12px; border-radius: 8px; font-size: 13px; display: flex; gap: 8px; align-items: flex-start; margin-bottom: 12px;
+  }
+  .alert-info { background: #e6f4ff; border: 1px solid #91caff; color: #0958d9; }
+  .alert-warning { background: #fffbe6; border: 1px solid #ffe58f; color: #ad6800; }
+
+  /* Token stat */
+  .token-line { font-size: 12px; color: var(--text-3); display: flex; gap: 14px; flex-wrap: wrap; }
+
+  /* 响应式 */
+  .mobile-mask { display: none; }
+  @media (max-width: 860px) {
+    .topbar-select { width: 130px; }
+    .ctx-meter .ctx-label { display: none; }
+    .sidebar { position: fixed; z-index: 950; height: 100vh; box-shadow: var(--shadow); }
+    .sidebar.collapsed { margin-left: -280px; }
+    .mobile-mask.show { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 940; }
+    .msg-user { max-width: 92%; }
+    .segmented-item { padding: 3px 7px; font-size: 12px; }
+  }
+</style>
+<style>
+  /* ============ 豆包风格视觉覆写 ============ */
+  body { background: #fff; }
+  .topbar { border-bottom: none; background: #fff; }
+  .segmented { background: #f2f3f5; border-radius: 999px; padding: 3px; }
+  .segmented-item { border-radius: 999px; }
+  .sidebar { background: #f7f8fa; border-right: none; }
+  .side-top { padding: 10px 12px 2px; display: flex; flex-direction: column; gap: 2px; }
+  .side-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; padding: 4px 10px 12px; }
+  .side-brand .logo-icon { width: 24px; height: 24px; font-size: 13px; border-radius: 7px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 10px; border: none;
+    background: none; border-radius: 8px; font-size: 14px; color: var(--text); cursor: pointer;
+    text-align: left; transition: background .2s;
+  }
+  .nav-item:hover { background: rgba(0,0,0,.05); }
+  .nav-sub { margin-left: auto; font-size: 11px; color: var(--text-3); max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-search { padding: 6px 12px 2px; }
+  .session-search .input { border: none; background: rgba(0,0,0,.045); border-radius: 8px; }
+  .session-search .input:focus { background: #fff; box-shadow: 0 0 0 2px rgba(5,145,255,.12); }
+  .session-item { border-radius: 8px; }
+  .session-item.active { background: rgba(0,0,0,.06); color: var(--text); }
+  .s-avatar {
+    width: 20px; height: 20px; border-radius: 50%; background: #fff; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center; font-size: 11px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.05);
+  }
+  .sidebar-foot { border-top: none; flex-direction: column; align-items: stretch; gap: 4px; }
+  .user-card { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 14px; color: var(--text); }
+  .user-card:hover { background: rgba(0,0,0,.05); }
+  .u-avatar { width: 26px; height: 26px; border-radius: 50%; background: #e6f4ff; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; }
+  .perm-line { font-size: 11px; color: var(--text-3); padding: 0 10px; }
+
+  /* 空状态：居中大标题 + 胶囊推荐 */
+  .empty-state { padding: 13vh 24px 32px; }
+  .empty-state .greet { font-size: 27px; font-weight: 600; color: #1f2329; margin-bottom: 26px; letter-spacing: .5px; }
+  .mode-pill { display: inline-flex; background: #f2f3f5; border-radius: 999px; padding: 4px; margin-bottom: 42px; }
+  .mp-item { border: none; background: none; padding: 6px 28px; border-radius: 999px; font-size: 14px; color: var(--text-2); cursor: pointer; transition: all .2s; }
+  .mp-item.active { background: #fff; color: var(--text); font-weight: 500; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+  .rec-wrap { max-width: 620px; margin: 0 auto; text-align: left; }
+  .rec-label { font-size: 12px; color: var(--text-3); margin-bottom: 10px; }
+  .rec-item {
+    display: block; width: fit-content; max-width: 100%; border: 1px solid #ececf1; background: #fff;
+    border-radius: 999px; padding: 9px 18px; margin-bottom: 10px; font-size: 14px; color: var(--text-2);
+    cursor: pointer; transition: all .2s; text-align: left;
+  }
+  .rec-item:hover { border-color: var(--primary); color: var(--primary); }
+  .env-line { margin-top: 30px; font-size: 12px; color: var(--text-3); line-height: 1.8; }
+
+  /* 输入框：圆角大卡片 */
+  .input-area { border-top: none; }
+  .input-frame { border: 1px solid #e8e8ed; border-radius: 22px; box-shadow: 0 6px 24px -10px rgba(0,0,0,.1); padding: 12px 14px 8px; }
+  .input-frame:focus-within { border-color: #d9d9e0; box-shadow: 0 8px 28px -10px rgba(0,0,0,.14); }
+  .model-mini { width: auto; border: none; background-color: transparent; font-size: 13px; color: var(--text-2); height: 28px; padding: 0 24px 0 4px; box-shadow: none !important; }
+  .model-mini:hover, .model-mini:focus { border: none; box-shadow: none !important; color: var(--text); }
+
+  /* 消息与卡片：去硬边框，柔和底色 */
+  .msg-user { background: #eaf3ff; border: none; border-radius: 18px 18px 4px 18px; }
+  .tool-card { border: none; background: #f7f8fa; border-radius: 12px; }
+  .tool-head { background: transparent; }
+  .tool-head:hover { background: rgba(0,0,0,.03); }
+  .tool-body { border-top: 1px solid rgba(0,0,0,.05); }
+  .approval-card { border-radius: 12px; }
+  .modal { border-radius: 16px; }
+  .btn { border-radius: 8px; }
+  .drawer { border-radius: 16px 0 0 16px; }
+  .recent-item { border-radius: 10px; }
+  .chip { display: none; }
+</style>
+<style>
+  /* ============ 输入框上方工具条 & 文件目录面板 ============ */
+  .input-meta { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 0 4px; }
+  .file-panel { width: 264px; flex-shrink: 0; background: #f7f8fa; display: flex; flex-direction: column; }
+  .file-panel.collapsed { display: none; }
+  .fp-header { display: flex; align-items: center; gap: 6px; padding: 12px 12px 8px; }
+  .fp-title { font-weight: 600; font-size: 14px; }
+  .fp-root { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px; }
+  .fp-tree { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
+  .ft-row {
+    display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px;
+    font-size: 13px; color: var(--text-2); cursor: pointer; user-select: none;
+  }
+  .ft-row:hover { background: rgba(0,0,0,.05); }
+  .ft-row .ft-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ft-caret { font-size: 9px; color: var(--text-3); width: 12px; flex-shrink: 0; transition: transform .15s; }
+  .ft-row.open .ft-caret { transform: rotate(90deg); }
+  .ft-icon { flex-shrink: 0; font-size: 13px; }
+  .ft-children { display: none; }
+  .ft-children.open { display: block; }
+  .file-preview {
+    background: var(--code-bg); color: #c9d1d9; padding: 16px 20px; font-size: 12.5px;
+    line-height: 1.7; overflow: auto; margin: 0; min-height: 320px; white-space: pre;
+  }
+  @media (max-width: 1100px) { .file-panel, #btn-files { display: none; } }
+</style>
+<style>
+  /* ============ 美化精修 ============ */
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,0,0,.12); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,.22); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* 消息入场动画（流式刷新的 assistant 除外） */
+  .msg-user, .msg-system, .approval-card { animation: msgIn .3s ease; }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* 渐变大标题 */
+  .empty-state .greet {
+    background: linear-gradient(120deg, #1677ff 20%, #722ed1 80%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+  }
+
+  /* 助手头像 */
+  .msg-row { display: flex; gap: 12px; align-items: flex-start; }
+  .a-avatar {
+    width: 30px; height: 30px; border-radius: 10px; flex-shrink: 0; margin-top: 1px;
+    background: linear-gradient(135deg, #1677ff, #722ed1); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+    box-shadow: 0 2px 8px -2px rgba(22,119,255,.45);
+  }
+  .msg-row .msg-assistant { flex: 1; min-width: 0; padding-top: 4px; }
+
+  /* 用户气泡 */
+  .msg-user { background: linear-gradient(135deg, #e9f3ff, #dceaff); box-shadow: 0 2px 8px -4px rgba(22,119,255,.25); }
+
+  /* 工具卡片：白底浮层 */
+  .tool-card { background: #fff; border: 1px solid #eef0f4; box-shadow: 0 1px 3px rgba(16,24,40,.05); transition: box-shadow .2s; }
+  .tool-card:hover { box-shadow: 0 6px 16px -8px rgba(16,24,40,.14); }
+  .tool-card .tag { border-radius: 999px; }
+  .tool-body pre, .tool-body .diff { border-radius: 0 0 0 0; }
+
+  /* 推荐项悬浮 */
+  .rec-item { transition: all .2s; }
+  .rec-item:hover { transform: translateY(-1px); border-color: #91caff; box-shadow: 0 8px 18px -10px rgba(22,119,255,.4); }
+
+  /* 发送按钮渐变 */
+  .send-btn { background: linear-gradient(135deg, #1677ff, #4096ff); box-shadow: 0 4px 12px -4px rgba(22,119,255,.5); transition: all .2s; }
+  .send-btn:hover { background: linear-gradient(135deg, #0958d9, #1677ff); transform: scale(1.07); }
+  .send-btn:disabled { background: rgba(0,0,0,.1); box-shadow: none; transform: none; }
+  .send-btn.stop { background: #1f2329; box-shadow: none; }
+
+  /* 输入框聚焦光晕 */
+  .input-frame { transition: border-color .2s, box-shadow .2s; }
+  .input-frame:focus-within { border-color: #bcd7ff; box-shadow: 0 0 0 3px rgba(22,119,255,.08), 0 8px 28px -10px rgba(0,0,0,.12); }
+
+  /* 侧栏选中态：白色浮起 */
+  .session-item { transition: background .2s; }
+  .session-item.active { background: #fff; box-shadow: 0 1px 4px rgba(16,24,40,.09); font-weight: 500; }
+  .nav-item:active { transform: scale(.98); }
+
+  /* 审批卡 */
+  .approval-card { border: 1px solid #ffe1a8; background: linear-gradient(180deg, #fffdf5, #fff8e6); box-shadow: 0 6px 18px -10px rgba(250,173,20,.5); }
+  .approval-cmd { background: rgba(0,0,0,.05); }
+
+  /* 遮罩轻微模糊 */
+  .modal-mask, .drawer-mask { backdrop-filter: blur(2px); }
+
+  /* 上下文条渐变 */
+  .ctx-bar i { background: linear-gradient(90deg, #1677ff, #69b1ff); }
+  .ctx-bar.warn i { background: linear-gradient(90deg, #faad14, #ffc53d); }
+
+  /* 主按钮渐变 */
+  .btn-primary { background: linear-gradient(135deg, #1677ff, #2f88ff); border: none; box-shadow: 0 2px 6px -2px rgba(22,119,255,.4); transition: all .2s; }
+  .btn-primary:hover { background: linear-gradient(135deg, #4096ff, #69b1ff); color: #fff; box-shadow: 0 4px 12px -4px rgba(22,119,255,.5); }
+  .btn-primary:disabled { background: rgba(0,0,0,.04); color: var(--text-3); box-shadow: none; }
+
+  /* Toast 胶囊 */
+  .toast { border-radius: 999px; }
+
+  /* 交互反馈 */
+  .ft-row:active, .rec-item:active, .chip:active { transform: scale(.98); }
+  .mp-item.active { box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+
+  /* 布局：侧栏通高，顶栏只在右侧内容区上方 */
+  #app { flex-direction: row; }
+  .app-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100vh; }
+
+  /* 侧栏品牌行 & 浮动展开按钮 */
+  .side-brand { padding-left: 10px; }
+  .side-brand > span:last-of-type { letter-spacing: .3px; }
+  .side-brand .side-collapse {
+    margin-left: auto; flex-shrink: 0; font-size: 15px; font-weight: 600;
+    color: var(--text-3); width: 26px; height: 26px;
+  }
+  .side-brand .side-collapse:hover { color: var(--text); }
+  .fab-expand {
+    position: fixed; top: 10px; left: 12px; z-index: 960; display: none;
+    background: #fff; box-shadow: 0 2px 10px rgba(16,24,40,.12); border: 1px solid #eef0f4;
+  }
+  .fab-expand.show { display: inline-flex; }
+</style>
+</head>
+<body>
+<div id="toast-wrap"></div>
+
+<div id="app">
+  <!-- 侧栏收起后的浮动展开按钮 -->
+  <button class="icon-btn fab-expand" id="fab-expand" title="展开侧边栏">›</button>
+
+  <!-- 侧边栏：导航 + 会话列表（通高） -->
+  <aside class="sidebar" id="sidebar">
+      <div class="side-top">
+        <div class="side-brand">
+          <span class="logo-icon">⌘</span><span>cyan</span>
+          <button class="icon-btn side-collapse" id="btn-toggle-sidebar" title="收起侧边栏">‹</button>
+        </div>
+        <button class="nav-item" id="btn-new-session">✨ 新工作任务</button>
+        <button class="nav-item" id="btn-project" title="切换 / 新建项目">📁 项目<span class="nav-sub mono" id="proj-name">cyan</span><span id="proj-path" style="display:none">~/Documents/workspace/cyan</span></button>
+        <button class="nav-item" id="nav-mcp">🧩 技能 · MCP</button>
+        <button class="nav-item" id="btn-settings">⚙️ 设置</button>
+      </div>
+      <div class="session-search"><input class="input" id="session-search" placeholder="搜索会话…"></div>
+      <div class="session-list" id="session-list"></div>
+      <div class="sidebar-foot">
+        <div class="user-card"><span class="u-avatar">😊</span><span>呆毛</span></div>
+        <div class="perm-line" id="perm-foot-text">权限模式：询问（危险操作需确认）</div>
+      </div>
+    </aside>
+  <div class="mobile-mask" id="mobile-mask"></div>
+
+  <!-- 右侧主列：顶栏 + 内容区 -->
+  <div class="app-main">
+    <!-- 顶栏（极简） -->
+    <header class="topbar">
+      <div class="spacer"></div>
+      <button class="icon-btn" id="btn-files" title="文件目录">🗂</button>
+      <button class="icon-btn" id="btn-drawer" title="任务与变更">📋</button>
+    </header>
+
+    <div class="body-wrap">
+    <!-- 会话主区 -->
+    <main class="chat-main">
+      <div class="chat-scroll" id="chat-scroll">
+        <div class="chat-inner" id="chat-inner"></div>
+      </div>
+      <div class="input-area">
+        <div class="plan-banner" id="plan-banner">🗒️ 计划模式：Agent 只会读代码并给出方案，不会修改文件或执行命令。</div>
+        <div class="input-box">
+          <div class="input-meta">
+            <div class="segmented" id="perm-segmented" title="权限模式">
+              <button class="segmented-item" data-mode="plan">计划</button>
+              <button class="segmented-item active" data-mode="ask">询问</button>
+              <button class="segmented-item" data-mode="auto">自动</button>
+            </div>
+            <div class="spacer" style="flex:1"></div>
+            <div class="ctx-meter" title="上下文窗口占用">
+              <span class="ctx-label">上下文</span>
+              <div class="ctx-bar" id="ctx-bar"><i style="width:18%"></i></div>
+              <span id="ctx-text">18%</span>
+            </div>
+          </div>
+          <div class="input-frame">
+            <textarea id="chat-input" rows="2" placeholder="描述你要完成的任务，例如：帮我修复登录页的超时 bug…"></textarea>
+            <div class="input-toolbar">
+              <button class="icon-btn" id="btn-attach" title="添加附件">＋</button>
+              <span class="input-hint">Enter 发送 · Shift+Enter 换行 · Esc 中断</span>
+              <div class="spacer" style="flex:1"></div>
+              <span class="token-line" id="token-line" style="display:none"></span>
+              <select class="select model-mini" id="model-select" title="选择模型"></select>
+              <button class="send-btn" id="btn-send" title="发送">➤</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- 右侧：本地文件目录 -->
+    <aside class="file-panel" id="file-panel">
+      <div class="fp-header">
+        <span class="fp-title">📂 文件</span>
+        <span class="fp-root mono" id="fp-root">cyan</span>
+        <div class="spacer" style="flex:1"></div>
+        <button class="icon-btn" id="fp-refresh" title="刷新">⟳</button>
+        <button class="icon-btn" id="fp-close" title="收起">✕</button>
+      </div>
+      <div class="fp-tree" id="file-tree"></div>
+    </aside>
+    </div>
+  </div>
+</div>
+
+<!-- 右侧抽屉：任务与变更 -->
+<div class="drawer-mask" id="drawer-mask"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-header">
+    <span class="modal-title">任务与变更</span>
+    <button class="modal-close" id="drawer-close">✕</button>
+  </div>
+  <div class="drawer-body">
+    <div class="section-title">✅ 当前任务（TODO）</div>
+    <div id="todo-list"><div style="color:var(--text-3);font-size:13px">暂无进行中的任务</div></div>
+    <div class="section-title">📝 文件变更（Checkpoints）</div>
+    <div id="change-list"><div style="color:var(--text-3);font-size:13px">本次会话还没有文件改动</div></div>
+  </div>
+</div>
+
+<!-- 设置 Modal -->
+<div class="modal-mask" id="settings-modal">
+  <div class="modal lg">
+    <div class="modal-header">
+      <span class="modal-title">设置</span>
+      <button class="modal-close" data-close="settings-modal">✕</button>
+    </div>
+    <div class="tabs" id="settings-tabs">
+      <div class="tab active" data-tab="models">模型配置</div>
+      <div class="tab" data-tab="mcp">MCP 服务器</div>
+      <div class="tab" data-tab="perms">权限规则</div>
+      <div class="tab" data-tab="about">关于</div>
+    </div>
+    <div class="modal-body" id="settings-body"></div>
+  </div>
+</div>
+
+<!-- 通用表单 Modal（模型 / MCP / 权限规则 共用） -->
+<div class="modal-mask" id="form-modal">
+  <div class="modal">
+    <div class="modal-header"><span class="modal-title" id="form-modal-title">编辑</span>
+      <button class="modal-close" data-close="form-modal">✕</button></div>
+    <div class="modal-body" id="form-modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn" id="form-cancel">取消</button>
+      <button class="btn btn-primary" id="form-ok">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 二次确认 Modal -->
+<div class="modal-mask" id="confirm-modal">
+  <div class="modal" style="width:420px">
+    <div class="modal-header"><span class="modal-title" id="confirm-title">确认操作</span></div>
+    <div class="modal-body" id="confirm-body" style="color:var(--text-2)"></div>
+    <div class="modal-footer">
+      <button class="btn" id="confirm-cancel">取消</button>
+      <button class="btn btn-danger" id="confirm-ok">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- Diff 查看 Modal -->
+<div class="modal-mask" id="diff-modal">
+  <div class="modal lg">
+    <div class="modal-header"><span class="modal-title" id="diff-title">文件变更</span>
+      <button class="modal-close" data-close="diff-modal">✕</button></div>
+    <div class="modal-body" id="diff-body" style="padding:0"></div>
+  </div>
+</div>
+
+<!-- 项目 Modal：指定文件夹 / 新建项目 -->
+<div class="modal-mask" id="project-modal">
+  <div class="modal lg" style="width:640px">
+    <div class="modal-header">
+      <span class="modal-title">项目</span>
+      <button class="modal-close" data-close="project-modal">✕</button>
+    </div>
+    <div class="tabs" id="project-tabs">
+      <div class="tab active" data-ptab="open">打开文件夹</div>
+      <div class="tab" data-ptab="create">新建项目</div>
+    </div>
+    <div class="modal-body" id="project-body"></div>
+  </div>
+</div>
+
+<!-- 文件预览 Modal -->
+<div class="modal-mask" id="file-modal">
+  <div class="modal lg">
+    <div class="modal-header"><span class="modal-title mono" id="file-title">文件预览</span>
+      <button class="modal-close" data-close="file-modal">✕</button></div>
+    <div class="modal-body" style="padding:0"><pre class="file-preview" id="file-preview"></pre></div>
+    <div class="modal-footer">
+      <button class="btn" id="file-close">关闭</button>
+      <button class="btn btn-primary" id="file-ref">@ 引用到输入框</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =====================================================
+ * Mock 数据
+ * ===================================================== */
+const mockModels = [
+  { id: 1, name: 'kimi-k2.5', provider: 'Moonshot', baseUrl: 'https://api.moonshot.cn/v1', apiKey: 'sk-****k2p9', contextWindow: 256000, isDefault: true,  status: 'enabled' },
+  { id: 2, name: 'claude-sonnet-4.5', provider: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiKey: 'sk-****a31f', contextWindow: 200000, isDefault: false, status: 'enabled' },
+  { id: 3, name: 'gpt-5.2-codex', provider: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-****7d02', contextWindow: 400000, isDefault: false, status: 'enabled' },
+  { id: 4, name: 'deepseek-v4', provider: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-****55bc', contextWindow: 128000, isDefault: false, status: 'enabled' },
+  { id: 5, name: 'qwen3-coder-plus', provider: 'Alibaba', baseUrl: 'https://dashscope.aliyuncs.com/v1', apiKey: 'sk-****c8e1', contextWindow: 131072, isDefault: false, status: 'disabled' },
+  { id: 6, name: 'glm-5', provider: 'Zhipu', baseUrl: 'https://open.bigmodel.cn/api/v4', apiKey: '****.90kl', contextWindow: 200000, isDefault: false, status: 'enabled' },
+  { id: 7, name: 'local-llama4-70b', provider: 'Ollama', baseUrl: 'http://localhost:11434/v1', apiKey: '-', contextWindow: 32768, isDefault: false, status: 'disabled' },
+];
+
+const mockMcpServers = [
+  { id: 1, name: 'filesystem', command: 'npx -y @mcp/server-filesystem ~/workspace', status: 'connected', tools: 11 },
+  { id: 2, name: 'github', command: 'npx -y @mcp/server-github', status: 'connected', tools: 26 },
+  { id: 3, name: 'postgres-prod', command: 'npx -y @mcp/server-postgres $PROD_DSN', status: 'error', tools: 0 },
+  { id: 4, name: 'playwright', command: 'npx -y @mcp/server-playwright', status: 'disabled', tools: 0 },
+];
+
+const mockPermRules = [
+  { id: 1, tool: 'Bash', pattern: 'rm -rf *', action: 'deny' },
+  { id: 2, tool: 'Bash', pattern: 'git push *', action: 'ask' },
+  { id: 3, tool: 'Bash', pattern: 'npm test*', action: 'allow' },
+  { id: 4, tool: 'Edit', pattern: 'src/**/*.ts', action: 'allow' },
+  { id: 5, tool: 'Edit', pattern: '.env*', action: 'deny' },
+  { id: 6, tool: 'FetchURL', pattern: '*', action: 'ask' },
+];
+
+/* 会话消息节点类型：
+ * { kind:'user', text }
+ * { kind:'assistant', text, streaming? }
+ * { kind:'tool', tool, arg, status: 'ok'|'error'|'running', output, outputType:'code'|'diff'|'text', note }
+ * { kind:'approval', tool, arg, reason, state: 'pending'|'allowed'|'rejected'|'auto' }
+ * { kind:'system', text }
+ */
+const mockSessions = [
+  {
+    id: 's1', title: '修复审批回调的中断 bug', time: '今天 13:02', group: '今天',
+    ctx: 62, tokens: { input: 48210, output: 6213 },
+    messages: [
+      { kind: 'user', text: 'npm test 里 approval.spec.ts 一直挂，帮我看下' },
+      { kind: 'assistant', text: '我先定位审批相关的测试和实现。' },
+      { kind: 'tool', tool: 'Read', arg: 'src/agent/approval.ts', status: 'ok', outputType: 'code',
+        output: 'export async function requestApproval(call: ToolCall): Promise<Decision> {\n  return new Promise((resolve) => {\n    ui.renderApprovalCard(call, (decision) => {\n      resolve(decision);\n    });\n  });\n}' },
+      { kind: 'tool', tool: 'Bash', arg: 'npx vitest run approval.spec.ts', status: 'error', outputType: 'code',
+        output: '✓ renders approval card (12ms)\n✗ resolves abort when user presses Esc\n\n  AssertionError: expected promise to resolve with "abort"\n  → the promise never settles after interrupt\n\nTests  1 failed | 1 passed (2)', note: '退出码 1 · 1 个测试失败' },
+      { kind: 'assistant', text: '复现了：中断信号没有传入审批 Promise，导致它永远悬置。我来修复。' },
+      { kind: 'tool', tool: 'Edit', arg: 'src/agent/approval.ts', status: 'ok', outputType: 'diff',
+        output: '@@ -1,6 +1,10 @@\n export async function requestApproval(\n   call: ToolCall,\n+  signal?: AbortSignal,\n ): Promise<Decision> {\n-  return new Promise((resolve) => {\n+  return new Promise((resolve) => {\n+    signal?.addEventListener("abort", () => resolve("abort"), { once: true });\n     ui.renderApprovalCard(call, (decision) => {\n       resolve(decision);\n     });', note: '+3 / -1' },
+      { kind: 'tool', tool: 'Bash', arg: 'npx vitest run approval.spec.ts', status: 'ok', outputType: 'code',
+        output: '✓ renders approval card (9ms)\n✓ resolves abort when user presses Esc (3ms)\n\nTests  2 passed (2)', note: '退出码 0' },
+      { kind: 'assistant', text: '修复完成，测试全部通过。改动摘要：\n\n- `requestApproval` 新增 `signal` 参数，监听 abort 事件并以 `"abort"` 决断结束 Promise\n- 顺手回归了 approval 相关 2 个测试用例\n\n改动保留在工作区，需要我提交的话说一声。' },
+    ],
+  },
+  {
+    id: 's2', title: '给 CLI 加上 --resume 参数', time: '今天 10:47', group: '今天',
+    ctx: 34, tokens: { input: 21044, output: 3102 },
+    messages: [
+      { kind: 'user', text: '支持 cyan --resume <sessionId> 恢复上次会话' },
+      { kind: 'assistant', text: '已完成。会话以 JSONL 追加写入 `~/.cyan/sessions/`，`--resume` 会重放事件流并恢复 TODO 与权限状态。' },
+    ],
+  },
+  {
+    id: 's3', title: '调研 ratatui 的 diff 渲染方案', time: '昨天 18:20', group: '昨天',
+    ctx: 21, tokens: { input: 15230, output: 2044 },
+    messages: [
+      { kind: 'user', text: '对比下 ratatui 里渲染 diff 的几种方案' },
+      { kind: 'assistant', text: '结论：用 `similar` crate 生成 unified diff，再按行映射到 `Line`/`Span` 着色，是当前生态最省事的方案……' },
+    ],
+  },
+  {
+    id: 's4', title: '初始化 monorepo 脚手架', time: '周一 09:15', group: '本周',
+    ctx: 48, tokens: { input: 33520, output: 4890 },
+    messages: [
+      { kind: 'user', text: '帮我初始化一个 pnpm monorepo，包含 cli 和 core 两个包' },
+      { kind: 'assistant', text: '脚手架已完成：`packages/cli` 负责 TUI 与命令解析，`packages/core` 放 agent loop 与工具系统，tsup 构建、vitest 单测均已配好。' },
+    ],
+  },
+];
+
+/* 新会话的模拟运行脚本 */
+const mockTodosTemplate = [
+  { text: '定位问题相关代码', state: 'pending' },
+  { text: '复现失败测试', state: 'pending' },
+  { text: '实现修复', state: 'pending' },
+  { text: '回归验证', state: 'pending' },
+];
+let mockChanges = []; // { id, path, add, del, diff }
+
+/* 最近打开的项目（真实产品里持久化在 ~/.cyan/projects.json） */
+const mockRecentProjects = [
+  { name: 'cyan', path: '~/Documents/workspace/cyan', lastOpened: '今天 13:02', sessions: 4 },
+  { name: 'mall-admin', path: '~/Documents/workspace/mall-admin', lastOpened: '昨天 17:40', sessions: 12 },
+  { name: 'blog-hugo', path: '~/Documents/blog', lastOpened: '周一 21:15', sessions: 3 },
+  { name: 'data-pipeline', path: '~/work/etl/data-pipeline', lastOpened: '6 月 20 日', sessions: 8 },
+];
+/* 新建项目可选脚手架模板 */
+const mockProjectTemplates = [
+  { value: 'empty', label: '空目录', desc: '只创建文件夹和 README' },
+  { value: 'node-cli', label: 'Node.js CLI', desc: 'package.json + commander + vitest' },
+  { value: 'react-antd', label: 'React + Ant Design', desc: 'Vite + TS + AntD + axios + router' },
+  { value: 'python-pkg', label: 'Python 包', desc: 'pyproject.toml + src 布局 + pytest' },
+];
+
+/* =====================================================
+ * 全局状态
+ * ===================================================== */
+const state = {
+  sessions: JSON.parse(JSON.stringify(mockSessions)),
+  activeId: null,
+  permMode: 'ask',        // plan | ask | auto
+  running: false,
+  abortFlag: false,
+  ctx: 18,
+  tokens: { input: 0, output: 0 },
+  todos: [],
+  sessionSeq: 100,
+  settingsTab: 'models',
+  modelPage: 1,
+  modelPageSize: 5,
+  modelFilter: '',
+  currentProject: { name: 'cyan', path: '~/Documents/workspace/cyan' },
+  projectTab: 'open',
+};
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+/* =====================================================
+ * Toast & 确认框
+ * ===================================================== */
+function toast(type, text) {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span class="dot"></span><span>${esc(text)}</span>`;
+  $('#toast-wrap').appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 320); }, 2400);
+}
+
+function confirmDialog({ title, body, okText = '确认', danger = true }) {
+  return new Promise((resolve) => {
+    $('#confirm-title').textContent = title;
+    $('#confirm-body').innerHTML = body;
+    const okBtn = $('#confirm-ok');
+    okBtn.textContent = okText;
+    okBtn.className = danger ? 'btn btn-danger' : 'btn btn-primary';
+    $('#confirm-modal').classList.add('open');
+    const done = (v) => { $('#confirm-modal').classList.remove('open'); okBtn.onclick = $('#confirm-cancel').onclick = null; resolve(v); };
+    okBtn.onclick = () => done(true);
+    $('#confirm-cancel').onclick = () => done(false);
+  });
+}
+
+/* =====================================================
+ * 侧边栏：会话列表
+ * ===================================================== */
+const S_EMOJI = ['💬', '🐛', '✨', '📦', '🔧', '🧪', '📝', '🚀'];
+const sEmoji = (id) => S_EMOJI[[...id].reduce((a, c) => a + c.charCodeAt(0), 0) % S_EMOJI.length];
+
+function renderSessions(filter = '') {
+  const list = $('#session-list');
+  const kw = filter.trim().toLowerCase();
+  const items = state.sessions.filter(s => !kw || s.title.toLowerCase().includes(kw));
+  if (!items.length) {
+    list.innerHTML = `<div style="text-align:center;color:var(--text-3);padding:32px 8px;font-size:13px">
+      ${kw ? '没有匹配的会话' : '还没有会话，点击上方按钮开始'}</div>`;
+    return;
+  }
+  const groups = {};
+  items.forEach(s => { (groups[s.group] = groups[s.group] || []).push(s); });
+  list.innerHTML = Object.entries(groups).map(([g, arr]) => `
+    <div class="session-group-label">${esc(g)}</div>
+    ${arr.map(s => `
+      <div class="session-item ${s.id === state.activeId ? 'active' : ''}" data-id="${s.id}">
+        <span class="s-avatar">${sEmoji(s.id)}</span>
+        <span class="s-title" title="${esc(s.title)}">${esc(s.title)}</span>
+        <button class="s-del" data-del="${s.id}" title="删除会话">✕</button>
+      </div>`).join('')}
+  `).join('');
+}
+
+$('#session-list').addEventListener('click', (e) => {
+  const delBtn = e.target.closest('[data-del]');
+  if (delBtn) {
+    e.stopPropagation();
+    const id = delBtn.dataset.del;
+    const s = state.sessions.find(x => x.id === id);
+    confirmDialog({
+      title: '删除会话',
+      body: `确定删除会话「<b>${esc(s.title)}</b>」吗？会话记录与 checkpoint 将一并清除，不可恢复。`,
+      okText: '删除',
+    }).then(ok => {
+      if (!ok) return;
+      state.sessions = state.sessions.filter(x => x.id !== id);
+      if (state.activeId === id) { state.activeId = null; renderChat(); }
+      renderSessions($('#session-search').value);
+      toast('success', '会话已删除');
+    });
+    return;
+  }
+  const item = e.target.closest('.session-item');
+  if (item && !state.running) {
+    state.activeId = item.dataset.id;
+    renderSessions($('#session-search').value);
+    renderChat();
+    closeSidebarMobile();
+  }
+});
+$('#session-search').addEventListener('input', (e) => renderSessions(e.target.value));
+
+$('#btn-new-session').addEventListener('click', () => {
+  if (state.running) { toast('warning', 'Agent 运行中，请先停止当前任务'); return; }
+  const id = 's' + (++state.sessionSeq);
+  state.sessions.unshift({ id, title: '新会话', time: '刚刚', group: '今天', ctx: 0, tokens: { input: 0, output: 0 }, messages: [] });
+  state.activeId = id;
+  state.todos = [];
+  renderSessions($('#session-search').value);
+  renderChat();
+  renderDrawer();
+  $('#chat-input').focus();
+  closeSidebarMobile();
+});
+
+/* =====================================================
+ * 会话区渲染
+ * ===================================================== */
+const TOOL_ICONS = { Read: '📄', Bash: '▶', Edit: '✏️', Grep: '🔍', Write: '💾', Glob: '🗂️' };
+const TOOL_CLASS = { Read: 'read', Bash: 'bash', Edit: 'edit', Grep: 'grep' };
+
+function toolStatusTag(st) {
+  if (st === 'ok') return '<span class="tag tag-green">完成</span>';
+  if (st === 'error') return '<span class="tag tag-red">失败</span>';
+  return '<span class="tool-running"><span class="spinner dark"></span>执行中</span>';
+}
+
+function renderDiff(diffText) {
+  return `<div class="diff">${diffText.split('\n').map(line => {
+    let cls = '', ln = '';
+    if (line.startsWith('@@')) cls = 'hunk';
+    else if (line.startsWith('+')) cls = 'add';
+    else if (line.startsWith('-')) cls = 'del';
+    return `<div class="diff-line ${cls}"><span class="ln">${ln}</span><span>${esc(line)}</span></div>`;
+  }).join('')}</div>`;
+}
+
+function nodeHtml(node, idx) {
+  switch (node.kind) {
+    case 'user':
+      return `<div class="msg-user">${esc(node.text)}</div>`;
+    case 'assistant':
+      return `<div class="msg-row"><span class="a-avatar">⌘</span><div class="msg-assistant" data-idx="${idx}">${esc(node.text)}${node.streaming ? '<span class="cursor"></span>' : ''}</div></div>`;
+    case 'system':
+      return `<div class="msg-system"><span>${esc(node.text)}</span></div>`;
+    case 'tool': {
+      const body = node.outputType === 'diff'
+        ? renderDiff(node.output || '')
+        : `<pre>${esc(node.output || '')}</pre>`;
+      return `<div class="tool-card" data-toolcard="${idx}">
+        <div class="tool-head">
+          <span class="tool-icon ${TOOL_CLASS[node.tool] || 'read'}">${TOOL_ICONS[node.tool] || '🔧'}</span>
+          <span class="tool-name">${esc(node.tool)}</span>
+          <span class="tool-arg mono">${esc(node.arg)}</span>
+          <span class="tool-status">${toolStatusTag(node.status)}</span>
+          <span class="tool-caret">▶</span>
+        </div>
+        <div class="tool-body">${body}${node.note ? `<div class="tool-note">${esc(node.note)}</div>` : ''}</div>
+      </div>`;
+    }
+    case 'approval': {
+      const stateHtml = {
+        pending: `<div class="approval-actions">
+            <button class="btn btn-primary btn-sm" data-approve="once">允许一次</button>
+            <button class="btn btn-sm" data-approve="always">总是允许 ${esc(node.tool)}</button>
+            <button class="btn btn-danger btn-sm" data-approve="reject">拒绝</button>
+          </div>`,
+        allowed: '<span class="tag tag-green">✓ 已允许</span>',
+        always: '<span class="tag tag-green">✓ 已加入白名单</span>',
+        auto: '<span class="tag tag-blue">⚡ 自动模式已批准</span>',
+        rejected: '<span class="tag tag-red">✕ 已拒绝</span>',
+      };
+      return `<div class="approval-card" data-approval="${idx}">
+        <div class="approval-title">⚠️ 需要批准：<span class="mono">${esc(node.tool)}</span></div>
+        <div class="approval-cmd mono">${esc(node.arg)}</div>
+        <div style="font-size:13px;color:var(--text-2)">${esc(node.reason)}</div>
+        ${stateHtml[node.state]}
+      </div>`;
+    }
+  }
+  return '';
+}
+
+function getActiveSession() {
+  return state.sessions.find(s => s.id === state.activeId);
+}
+
+function renderChat() {
+  const box = $('#chat-inner');
+  const s = getActiveSession();
+  if (!s || !s.messages.length) {
+    box.innerHTML = `<div class="empty-state">
+      <div class="greet">有什么我能帮你的吗？</div>
+      <div class="mode-pill">
+        <button class="mp-item active">对话</button>
+        <button class="mp-item" id="mp-work">工作</button>
+      </div>
+      <div class="rec-wrap">
+        <div class="rec-label">为你推荐</div>
+        <button class="rec-item" data-prompt="帮我修复 approval 模块在中断时 Promise 悬置的 bug">🐛 修复 approval 模块的中断 bug</button>
+        <button class="rec-item" data-prompt="给 Bash 工具加上超时控制，默认 2 分钟">⏱️ 给 Bash 工具加超时控制</button>
+        <button class="rec-item" data-prompt="解释 src/agent/loop.ts 的主循环逻辑">🔍 解释 agent loop 主循环</button>
+        <button class="rec-item" data-prompt="把当前项目初始化为 pnpm monorepo">📦 初始化为 pnpm monorepo</button>
+      </div>
+      <p class="env-line">当前项目：<b class="mono">${esc(state.currentProject.path)}</b><br>权限模式：<b>${{ plan: '计划', ask: '询问', auto: '自动' }[state.permMode]}</b> · 模型：<b>${esc($('#model-select').value)}</b></p>
+    </div>`;
+    updateTokenLine(null);
+    return;
+  }
+  box.innerHTML = s.messages.map((m, i) => nodeHtml(m, i)).join('');
+  updateTokenLine(s.tokens);
+  scrollToBottom();
+}
+
+function scrollToBottom() {
+  const sc = $('#chat-scroll');
+  sc.scrollTop = sc.scrollHeight;
+}
+
+$('#chat-inner').addEventListener('click', (e) => {
+  const head = e.target.closest('.tool-head');
+  if (head) { head.parentElement.classList.toggle('open'); return; }
+  const chip = e.target.closest('[data-prompt]');
+  if (chip) { $('#chat-input').value = chip.dataset.prompt; $('#chat-input').focus(); }
+});
+
+function updateTokenLine(tokens) {
+  const line = $('#token-line');
+  if (!tokens || (!tokens.input && !tokens.output)) { line.style.display = 'none'; return; }
+  line.style.display = 'inline-flex';
+  line.innerHTML = `<span>↑ ${(tokens.input / 1000).toFixed(1)}k</span><span>↓ ${(tokens.output / 1000).toFixed(1)}k</span>`;
+}
+
+/* =====================================================
+ * Agent 模拟运行引擎
+ * ===================================================== */
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+function checkAbort() { if (state.abortFlag) throw new Error('__aborted__'); }
+
+function pushMsg(node) {
+  const s = getActiveSession();
+  s.messages.push(node);
+  return s.messages.length - 1;
+}
+
+function rerenderMsg(idx) {
+  const s = getActiveSession();
+  const box = $('#chat-inner');
+  const tmp = document.createElement('div');
+  tmp.innerHTML = nodeHtml(s.messages[idx], idx);
+  const old = box.children[idx];
+  if (old && tmp.firstChild) box.replaceChild(tmp.firstChild, old);
+  else box.appendChild(tmp.firstChild);
+}
+
+async function streamText(text) {
+  const idx = pushMsg({ kind: 'assistant', text: '', streaming: true });
+  const s = getActiveSession();
+  for (let i = 0; i < text.length; i += 2) {
+    checkAbort();
+    s.messages[idx].text = text.slice(0, i + 2);
+    rerenderMsg(idx);
+    scrollToBottom();
+    await sleep(18);
+  }
+  s.messages[idx].text = text;
+  s.messages[idx].streaming = false;
+  rerenderMsg(idx);
+  state.tokens.output += Math.ceil(text.length / 1.6);
+}
+
+async function runTool(node, duration = 900) {
+  const idx = pushMsg({ ...node, status: 'running', output: '' });
+  rerenderMsg(idx);
+  scrollToBottom();
+  await sleep(duration);
+  checkAbort();
+  const s = getActiveSession();
+  Object.assign(s.messages[idx], node);
+  rerenderMsg(idx);
+  scrollToBottom();
+  if (node.outputType === 'diff') {
+    const add = (node.output.match(/^\+(?!\+\+)/gm) || []).length;
+    const del = (node.output.match(/^-(?!--)/gm) || []).length;
+    mockChanges.push({ id: Date.now(), path: node.arg, add, del, diff: node.output });
+    renderDrawer();
+  }
+  await sleep(300);
+}
+
+function setTodo(i, st) {
+  if (state.todos[i]) { state.todos[i].state = st; renderDrawer(); }
+}
+
+/* 审批：返回 'once' | 'always' | 'auto' | 'reject' */
+function askApproval(node) {
+  return new Promise((resolve) => {
+    const idx = pushMsg({ ...node, state: 'pending' });
+    rerenderMsg(idx);
+    scrollToBottom();
+
+    if (state.permMode === 'auto') {
+      const s = getActiveSession();
+      s.messages[idx].state = 'auto';
+      setTimeout(() => { if (!state.abortFlag) { rerenderMsg(idx); scrollToBottom(); } resolve(state.abortFlag ? 'reject' : 'auto'); }, 1100);
+      return;
+    }
+    const card = document.querySelector(`[data-approval="${idx}"]`);
+    card.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-approve]');
+      if (!btn) return;
+      const v = btn.dataset.approve;
+      const s = getActiveSession();
+      s.messages[idx].state = v === 'reject' ? 'rejected' : v;
+      rerenderMsg(idx);
+      scrollToBottom();
+      if (v === 'always') {
+        mockPermRules.push({ id: Date.now(), tool: node.tool, pattern: node.arg.split(' ')[0] + '*', action: 'allow' });
+        toast('success', `已添加权限规则：${node.tool} 自动放行`);
+      }
+      resolve(v);
+    });
+  });
+}
+
+function bumpCtx(delta) {
+  state.ctx = Math.min(96, state.ctx + delta);
+  const bar = $('#ctx-bar');
+  bar.querySelector('i').style.width = state.ctx + '%';
+  bar.classList.toggle('warn', state.ctx >= 80);
+  $('#ctx-text').textContent = state.ctx + '%';
+  const s = getActiveSession();
+  if (s) s.ctx = state.ctx;
+}
+
+async function simulateRun(userText) {
+  const s = getActiveSession();
+  if (s.title === '新会话') {
+    s.title = userText.length > 18 ? userText.slice(0, 18) + '…' : userText;
+    renderSessions($('#session-search').value);
+  }
+  state.tokens.input += Math.ceil(userText.length * 1.2) + 4200;
+  state.todos = JSON.parse(JSON.stringify(mockTodosTemplate));
+  renderDrawer();
+
+  const planMode = state.permMode === 'plan';
+
+  await streamText(planMode
+    ? '好的，当前处于计划模式。我先只读地调研一下相关代码，然后给出修复方案。'
+    : '收到，我来处理。先定位相关代码。');
+  setTodo(0, 'doing');
+
+  await runTool({
+    kind: 'tool', tool: 'Grep', arg: '"abort" --type ts', status: 'ok', outputType: 'code',
+    output: 'src/agent/loop.ts:41:    const controller = new AbortController();\nsrc/agent/approval.ts:5:  return new Promise((resolve) => {\nsrc/agent/approval.ts:12:export function cancelPending() {\nsrc/tools/bash.ts:77:  signal: opts.signal,',
+    note: '4 个匹配 · 搜索 128 个文件耗时 0.3s',
+  }, 800);
+  await runTool({
+    kind: 'tool', tool: 'Read', arg: 'src/agent/approval.ts', status: 'ok', outputType: 'code',
+    output: 'export async function requestApproval(call: ToolCall): Promise<Decision> {\n  return new Promise((resolve) => {\n    ui.renderApprovalCard(call, (decision) => {\n      resolve(decision);\n    });\n  });\n}\n\nexport function cancelPending() {\n  // TODO: 目前只是隐藏卡片，没有 settle Promise\n  ui.hideApprovalCard();\n}',
+  }, 700);
+  setTodo(0, 'done');
+  setTodo(1, 'doing');
+
+  await streamText('找到了：`requestApproval` 返回的 Promise 只在用户点击时 settle，Esc 中断只隐藏了卡片，Promise 永远悬置，agent loop 因此卡死。我先跑测试复现。');
+
+  await runTool({
+    kind: 'tool', tool: 'Bash', arg: 'npx vitest run approval.spec.ts', status: 'error', outputType: 'code',
+    output: '✓ renders approval card (12ms)\n✗ resolves abort when user presses Esc\n\n  AssertionError: expected promise to resolve with "abort"\n  → the promise never settles after interrupt\n\nTests  1 failed | 1 passed (2)',
+    note: '退出码 1 · 1 个测试失败',
+  }, 1400);
+  setTodo(1, 'done');
+
+  if (planMode) {
+    await streamText('复现确认。以下是修复方案（计划模式下不会改动任何文件）：\n\n1. `requestApproval` 增加 `signal?: AbortSignal` 参数\n2. 在 Promise 内监听 `abort` 事件，触发时以 `"abort"` 决断并移除监听器\n3. `cancelPending()` 改为触发 AbortController，而不是只隐藏 UI\n4. 补充回归测试：中断后 Promise 必须 settle\n\n切换到「询问」或「自动」模式后，我可以直接动手改。');
+    setTodo(2, 'pending'); setTodo(3, 'pending');
+    finishRun(false);
+    return;
+  }
+
+  setTodo(2, 'doing');
+  await streamText('测试复现了问题。现在修复 `approval.ts`。');
+  await runTool({
+    kind: 'tool', tool: 'Edit', arg: 'src/agent/approval.ts', status: 'ok', outputType: 'diff',
+    output: '@@ -1,6 +1,10 @@\n export async function requestApproval(\n   call: ToolCall,\n+  signal?: AbortSignal,\n ): Promise<Decision> {\n-  return new Promise((resolve) => {\n+  return new Promise((resolve) => {\n+    signal?.addEventListener("abort", () => resolve("abort"), { once: true });\n     ui.renderApprovalCard(call, (decision) => {\n       resolve(decision);\n     });',
+    note: '+3 / -1',
+  }, 900);
+  setTodo(2, 'done');
+  setTodo(3, 'doing');
+
+  await runTool({
+    kind: 'tool', tool: 'Bash', arg: 'npx vitest run approval.spec.ts', status: 'ok', outputType: 'code',
+    output: '✓ renders approval card (9ms)\n✓ resolves abort when user presses Esc (3ms)\n\nTests  2 passed (2)',
+    note: '退出码 0',
+  }, 1300);
+
+  const decision = await askApproval({
+    kind: 'approval', tool: 'Bash', arg: 'git commit -m "fix: settle approval promise on abort"',
+    reason: '该命令会修改 git 历史（写操作），命中权限规则 git * → 需要确认。',
+  });
+
+  if (decision === 'reject') {
+    await streamText('好的，已跳过提交。改动保留在工作区，你可以随时让我提交或回滚。');
+  } else {
+    await runTool({
+      kind: 'tool', tool: 'Bash', arg: 'git commit -m "fix: settle approval promise on abort"', status: 'ok', outputType: 'code',
+      output: '[main 3f9a21c] fix: settle approval promise on abort\n 1 file changed, 4 insertions(+), 1 deletion(-)',
+      note: '退出码 0',
+    }, 800);
+    await streamText('修复完成并已提交 `3f9a21c`。总结：\n\n- `requestApproval` 新增 `signal` 参数，abort 时以 `"abort"` 决断，解决 Promise 悬置\n- 回归测试 2/2 通过\n- 变更文件：`src/agent/approval.ts`（+3 / -1）');
+  }
+  setTodo(3, 'done');
+  finishRun(true);
+}
+
+function finishRun(completed) {
+  state.running = false;
+  state.abortFlag = false;
+  updateSendBtn();
+  const s = getActiveSession();
+  if (s) {
+    s.tokens.input += state.tokens.input;
+    s.tokens.output += state.tokens.output;
+    pushMsg({ kind: 'system', text: completed ? `任务完成 · 本次消耗 ↑ ${(state.tokens.input / 1000).toFixed(1)}k ↓ ${(state.tokens.output / 1000).toFixed(1)}k tokens` : '计划已输出，未做任何修改' });
+    rerenderMsg(s.messages.length - 1);
+    updateTokenLine(s.tokens);
+  }
+  state.tokens = { input: 0, output: 0 };
+  scrollToBottom();
+}
+
+async function handleSend() {
+  const input = $('#chat-input');
+  const text = input.value.trim();
+  if (!text) { toast('warning', '请输入任务描述'); return; }
+  if (!state.activeId) { $('#btn-new-session').click(); }
+  state.running = true;
+  state.abortFlag = false;
+  updateSendBtn();
+  pushMsg({ kind: 'user', text });
+  rerenderMsg(getActiveSession().messages.length - 1);
+  input.value = '';
+  scrollToBottom();
+  try {
+    await simulateRun(text);
+  } catch (err) {
+    if (err.message === '__aborted__') {
+      const s = getActiveSession();
+      pushMsg({ kind: 'system', text: '⏹ 已由用户中断' });
+      rerenderMsg(s.messages.length - 1);
+      state.running = false;
+      state.abortFlag = false;
+      updateSendBtn();
+      toast('info', '已中断当前任务');
+    } else {
+      pushMsg({ kind: 'system', text: '⚠️ 运行出错：' + err.message });
+      rerenderMsg(getActiveSession().messages.length - 1);
+      state.running = false;
+      updateSendBtn();
+      toast('error', 'Agent 运行出错，请重试');
+    }
+  }
+}
+
+function updateSendBtn() {
+  const btn = $('#btn-send');
+  if (state.running) { btn.className = 'send-btn stop'; btn.textContent = '■'; btn.title = '停止'; }
+  else { btn.className = 'send-btn'; btn.textContent = '➤'; btn.title = '发送'; }
+}
+
+$('#btn-send').addEventListener('click', () => {
+  if (state.running) { state.abortFlag = true; }
+  else handleSend();
+});
+$('#chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!state.running) handleSend(); }
+  if (e.key === 'Escape' && state.running) { state.abortFlag = true; }
+});
+
+/* =====================================================
+ * 权限模式 & 模型选择
+ * ===================================================== */
+const PERM_DESC = {
+  plan: '权限模式：计划（只读，不改文件不跑命令）',
+  ask: '权限模式：询问（危险操作需确认）',
+  auto: '权限模式：自动（白名单内全部放行）',
+};
+$('#perm-segmented').addEventListener('click', (e) => {
+  const btn = e.target.closest('.segmented-item');
+  if (!btn || state.running) { if (state.running) toast('warning', '运行中不可切换权限模式'); return; }
+  $$('#perm-segmented .segmented-item').forEach(b => b.classList.toggle('active', b === btn));
+  state.permMode = btn.dataset.mode;
+  $('#perm-foot-text').textContent = PERM_DESC[state.permMode];
+  $('#plan-banner').classList.toggle('show', state.permMode === 'plan');
+  toast('info', '已切换到「' + btn.textContent + '」模式');
+});
+
+function renderModelSelect() {
+  const sel = $('#model-select');
+  const enabled = mockModels.filter(m => m.status === 'enabled');
+  sel.innerHTML = enabled.map(m =>
+    `<option value="${esc(m.name)}" ${m.isDefault ? 'selected' : ''}>${esc(m.name)}${m.isDefault ? ' · 默认' : ''}</option>`).join('');
+}
+$('#model-select').addEventListener('change', (e) => toast('info', `已切换模型：${e.target.value}`));
+
+/* =====================================================
+ * 侧边栏折叠（移动端）
+ * ===================================================== */
+function closeSidebarMobile() {
+  if (window.innerWidth <= 860) {
+    $('#sidebar').classList.add('collapsed');
+    $('#mobile-mask').classList.remove('show');
+    $('#fab-expand').classList.add('show');
+  }
+}
+function toggleSidebar() {
+  const sb = $('#sidebar');
+  sb.classList.toggle('collapsed');
+  const collapsed = sb.classList.contains('collapsed');
+  $('#fab-expand').classList.toggle('show', collapsed);
+  $('#mobile-mask').classList.toggle('show', window.innerWidth <= 860 && !collapsed);
+}
+$('#btn-toggle-sidebar').addEventListener('click', toggleSidebar);
+$('#fab-expand').addEventListener('click', toggleSidebar);
+$('#mobile-mask').addEventListener('click', closeSidebarMobile);
+
+/* =====================================================
+ * 右侧抽屉：TODO & 变更
+ * ===================================================== */
+function renderDrawer() {
+  const tl = $('#todo-list');
+  if (!state.todos.length) {
+    tl.innerHTML = '<div style="color:var(--text-3);font-size:13px">暂无进行中的任务</div>';
+  } else {
+    tl.innerHTML = state.todos.map(t => `
+      <div class="todo-item ${t.state === 'done' ? 'done' : t.state === 'doing' ? 'doing' : ''}">
+        <span class="todo-check">${t.state === 'done' ? '✓' : ''}</span>
+        <span class="todo-text">${esc(t.text)}</span>
+      </div>`).join('');
+  }
+  const cl = $('#change-list');
+  if (!mockChanges.length) {
+    cl.innerHTML = '<div style="color:var(--text-3);font-size:13px">本次会话还没有文件改动</div>';
+  } else {
+    cl.innerHTML = mockChanges.map(c => `
+      <div class="change-item">
+        <span>📄</span>
+        <span class="f-path mono" title="${esc(c.path)}">${esc(c.path)}</span>
+        <span class="diff-stat"><span class="add">+${c.add}</span> <span class="del">-${c.del}</span></span>
+        <button class="btn-link" data-view-diff="${c.id}">查看</button>
+        <button class="btn-link danger" data-rollback="${c.id}">回滚</button>
+      </div>`).join('');
+  }
+}
+
+$('#change-list').addEventListener('click', (e) => {
+  const view = e.target.closest('[data-view-diff]');
+  const rb = e.target.closest('[data-rollback]');
+  if (view) {
+    const c = mockChanges.find(x => x.id == view.dataset.viewDiff);
+    $('#diff-title').textContent = '变更：' + c.path;
+    $('#diff-body').innerHTML = renderDiff(c.diff);
+    $('#diff-modal').classList.add('open');
+  }
+  if (rb) {
+    const c = mockChanges.find(x => x.id == rb.dataset.rollback);
+    confirmDialog({
+      title: '回滚变更',
+      body: `将 <b class="mono">${esc(c.path)}</b> 恢复到本 checkpoint 之前的状态？此操作不可撤销。`,
+      okText: '回滚',
+    }).then(ok => {
+      if (!ok) return;
+      mockChanges = mockChanges.filter(x => x.id != c.id);
+      renderDrawer();
+      toast('success', `已回滚 ${c.path}`);
+    });
+  }
+});
+
+$('#btn-drawer').addEventListener('click', () => { $('#drawer').classList.add('open'); $('#drawer-mask').classList.add('open'); });
+function closeDrawer() { $('#drawer').classList.remove('open'); $('#drawer-mask').classList.remove('open'); }
+$('#drawer-close').addEventListener('click', closeDrawer);
+$('#drawer-mask').addEventListener('click', closeDrawer);
+
+/* =====================================================
+ * 设置：模型 / MCP / 权限规则
+ * ===================================================== */
+$('#btn-settings').addEventListener('click', () => {
+  $('#settings-modal').classList.add('open');
+  renderSettings();
+});
+$('#settings-tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  $$('#settings-tabs .tab').forEach(t => t.classList.toggle('active', t === tab));
+  state.settingsTab = tab.dataset.tab;
+  renderSettings();
+});
+$$('.modal-close[data-close]').forEach(b => b.addEventListener('click', () => $('#' + b.dataset.close).classList.remove('open')));
+
+function statusTag(st, map) {
+  const conf = map[st];
+  return `<span class="tag tag-${conf[1]}">${conf[0]}</span>`;
+}
+
+function pagerHtml(total, page, pageSize, key) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  let btns = `<span class="page-total">共 ${total} 条</span>`;
+  btns += `<button class="page-btn" data-page="${page - 1}" data-pkey="${key}" ${page <= 1 ? 'disabled' : ''}>‹</button>`;
+  for (let i = 1; i <= pages; i++) btns += `<button class="page-btn ${i === page ? 'active' : ''}" data-page="${i}" data-pkey="${key}">${i}</button>`;
+  btns += `<button class="page-btn" data-page="${page + 1}" data-pkey="${key}" ${page >= pages ? 'disabled' : ''}>›</button>`;
+  return `<div class="pagination">${btns}</div>`;
+}
+
+function renderSettings() {
+  const body = $('#settings-body');
+  const tab = state.settingsTab;
+
+  if (tab === 'models') {
+    const kw = state.modelFilter.toLowerCase();
+    const filtered = mockModels.filter(m => !kw || m.name.toLowerCase().includes(kw) || m.provider.toLowerCase().includes(kw));
+    const start = (state.modelPage - 1) * state.modelPageSize;
+    const pageItems = filtered.slice(start, start + state.modelPageSize);
+    body.innerHTML = `
+      <div class="settings-toolbar">
+        <input class="input" style="width:220px" id="model-filter" placeholder="搜索名称 / Provider…" value="${esc(state.modelFilter)}">
+        <button class="btn btn-primary" id="btn-add-model">＋ 新增模型</button>
+      </div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>模型</th><th>Provider</th><th>上下文</th><th>状态</th><th>默认</th><th>操作</th></tr></thead>
+        <tbody>${pageItems.length ? pageItems.map(m => `
+          <tr>
+            <td class="mono">${esc(m.name)}</td>
+            <td>${esc(m.provider)}</td>
+            <td>${(m.contextWindow / 1000).toFixed(0)}k</td>
+            <td>${statusTag(m.status, { enabled: ['启用', 'green'], disabled: ['停用', 'default'] })}</td>
+            <td>${m.isDefault ? '<span class="tag tag-blue">默认</span>' : ''}</td>
+            <td>
+              <button class="btn-link" data-model-edit="${m.id}">编辑</button>
+              <button class="btn-link" data-model-default="${m.id}" ${m.isDefault || m.status === 'disabled' ? 'disabled' : ''}>设为默认</button>
+              <button class="btn-link danger" data-model-del="${m.id}" ${m.isDefault ? 'disabled' : ''}>删除</button>
+            </td>
+          </tr>`).join('') : '<tr><td colspan="6" class="empty-cell">没有匹配的模型配置</td></tr>'}
+        </tbody>
+      </table></div>
+      ${pagerHtml(filtered.length, state.modelPage, state.modelPageSize, 'model')}
+    `;
+    $('#model-filter').addEventListener('input', (e) => { state.modelFilter = e.target.value; state.modelPage = 1; renderSettings(); $('#model-filter').focus(); });
+  }
+
+  if (tab === 'mcp') {
+    body.innerHTML = `
+      <div class="alert alert-warning">⚠️ MCP 服务器以子进程方式运行，请只添加可信来源；连接失败的服务器会标记为错误并自动跳过。</div>
+      <div class="settings-toolbar">
+        <span style="color:var(--text-2)">已配置 ${mockMcpServers.length} 个服务器</span>
+        <button class="btn btn-primary" id="btn-add-mcp">＋ 新增服务器</button>
+      </div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>名称</th><th>启动命令</th><th>状态</th><th>工具数</th><th>操作</th></tr></thead>
+        <tbody>${mockMcpServers.length ? mockMcpServers.map(s => `
+          <tr>
+            <td><b>${esc(s.name)}</b></td>
+            <td class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.command)}">${esc(s.command)}</td>
+            <td>${statusTag(s.status, { connected: ['已连接', 'green'], error: ['连接失败', 'red'], disabled: ['已禁用', 'default'] })}</td>
+            <td>${s.status === 'connected' ? s.tools : '—'}</td>
+            <td>
+              <button class="btn-link" data-mcp-toggle="${s.id}">${s.status === 'disabled' ? '启用' : '禁用'}</button>
+              <button class="btn-link" data-mcp-edit="${s.id}">编辑</button>
+              <button class="btn-link danger" data-mcp-del="${s.id}">删除</button>
+            </td>
+          </tr>`).join('') : '<tr><td colspan="5" class="empty-cell">还没有配置 MCP 服务器</td></tr>'}
+        </tbody>
+      </table></div>
+    `;
+  }
+
+  if (tab === 'perms') {
+    body.innerHTML = `
+      <div class="alert alert-info">ℹ️ 规则自上而下匹配，命中即生效。deny 永远优先；ask 弹出审批卡片；allow 静默放行。</div>
+      <div class="settings-toolbar">
+        <span style="color:var(--text-2)">共 ${mockPermRules.length} 条规则</span>
+        <button class="btn btn-primary" id="btn-add-perm">＋ 新增规则</button>
+      </div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>#</th><th>工具</th><th>匹配模式</th><th>动作</th><th>操作</th></tr></thead>
+        <tbody>${mockPermRules.length ? mockPermRules.map((r, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td><span class="tag tag-default mono">${esc(r.tool)}</span></td>
+            <td class="mono">${esc(r.pattern)}</td>
+            <td>${statusTag(r.action, { allow: ['allow 放行', 'green'], ask: ['ask 询问', 'orange'], deny: ['deny 拒绝', 'red'] })}</td>
+            <td>
+              <button class="btn-link" data-perm-edit="${r.id}">编辑</button>
+              <button class="btn-link danger" data-perm-del="${r.id}">删除</button>
+            </td>
+          </tr>`).join('') : '<tr><td colspan="5" class="empty-cell">没有权限规则，所有危险操作都会询问</td></tr>'}
+        </tbody>
+      </table></div>
+    `;
+  }
+
+  if (tab === 'about') {
+    body.innerHTML = `
+      <div style="text-align:center;padding:24px 0">
+        <div class="logo-icon" style="width:56px;height:56px;font-size:28px;margin:0 auto 12px;border-radius:14px">⌘</div>
+        <h3 style="margin-bottom:6px">cyan v0.1.0</h3>
+        <p style="color:var(--text-3);margin-bottom:20px">终端里的 AI 编程搭档 · 产品原型</p>
+        <div style="display:flex;justify-content:center;gap:24px;flex-wrap:wrap;text-align:left;max-width:560px;margin:0 auto">
+          <div><div class="section-title">核心能力</div>
+            <p style="color:var(--text-2);line-height:2">Agent 自主任务循环<br>文件 / Shell / 搜索工具集<br>分级权限与审批<br>上下文自动压缩</p></div>
+          <div><div class="section-title">本原型覆盖</div>
+            <p style="color:var(--text-2);line-height:2">会话管理（搜索 / 删除 / 新建）<br>工具调用渲染与 diff 展示<br>审批流与三种权限模式<br>模型 / MCP / 权限规则配置</p></div>
+        </div>
+      </div>`;
+  }
+}
+
+/* 设置区分页 & 各表操作（事件委托） */
+$('#settings-body').addEventListener('click', async (e) => {
+  const t = e.target;
+  const pg = t.closest('[data-page]');
+  if (pg && !pg.disabled) {
+    if (pg.dataset.pkey === 'model') { state.modelPage = Number(pg.dataset.page); renderSettings(); }
+    return;
+  }
+
+  /* ---- 模型表 ---- */
+  if (t.closest('#btn-add-model')) return openModelForm(null);
+  const mEdit = t.closest('[data-model-edit]');
+  if (mEdit) return openModelForm(mockModels.find(m => m.id == mEdit.dataset.modelEdit));
+  const mDef = t.closest('[data-model-default]');
+  if (mDef && !mDef.disabled) {
+    mockModels.forEach(m => m.isDefault = m.id == mDef.dataset.modelDefault);
+    renderSettings(); renderModelSelect();
+    toast('success', '默认模型已更新');
+    return;
+  }
+  const mDel = t.closest('[data-model-del]');
+  if (mDel && !mDel.disabled) {
+    const m = mockModels.find(x => x.id == mDel.dataset.modelDel);
+    const ok = await confirmDialog({ title: '删除模型', body: `确定删除模型 <b class="mono">${esc(m.name)}</b> 的配置吗？`, okText: '删除' });
+    if (ok) {
+      mockModels.splice(mockModels.indexOf(m), 1);
+      renderSettings(); renderModelSelect();
+      toast('success', '模型配置已删除');
+    }
+    return;
+  }
+
+  /* ---- MCP 表 ---- */
+  if (t.closest('#btn-add-mcp')) return openMcpForm(null);
+  const cEdit = t.closest('[data-mcp-edit]');
+  if (cEdit) return openMcpForm(mockMcpServers.find(s => s.id == cEdit.dataset.mcpEdit));
+  const cToggle = t.closest('[data-mcp-toggle]');
+  if (cToggle) {
+    const s = mockMcpServers.find(x => x.id == cToggle.dataset.mcpToggle);
+    if (s.status === 'disabled') {
+      s.status = 'connected'; s.tools = s.name === 'playwright' ? 7 : s.tools || 5;
+      toast('success', `已启用并连接 ${s.name}`);
+    } else { s.status = 'disabled'; toast('info', `已禁用 ${s.name}`); }
+    renderSettings();
+    return;
+  }
+  const cDel = t.closest('[data-mcp-del]');
+  if (cDel) {
+    const s = mockMcpServers.find(x => x.id == cDel.dataset.mcpDel);
+    const ok = await confirmDialog({ title: '删除 MCP 服务器', body: `确定删除服务器 <b>${esc(s.name)}</b> 吗？正在使用的会话将失去其工具。`, okText: '删除' });
+    if (ok) { mockMcpServers.splice(mockMcpServers.indexOf(s), 1); renderSettings(); toast('success', '服务器已删除'); }
+    return;
+  }
+
+  /* ---- 权限规则表 ---- */
+  if (t.closest('#btn-add-perm')) return openPermForm(null);
+  const pEdit = t.closest('[data-perm-edit]');
+  if (pEdit) return openPermForm(mockPermRules.find(r => r.id == pEdit.dataset.permEdit));
+  const pDel = t.closest('[data-perm-del]');
+  if (pDel) {
+    const r = mockPermRules.find(x => x.id == pDel.dataset.permDel);
+    const ok = await confirmDialog({ title: '删除权限规则', body: `删除规则 <b class="mono">${esc(r.tool)} ${esc(r.pattern)}</b> 后，匹配的操作将回退到「询问」。`, okText: '删除' });
+    if (ok) { mockPermRules.splice(mockPermRules.indexOf(r), 1); renderSettings(); toast('success', '规则已删除'); }
+    return;
+  }
+});
+
+/* =====================================================
+ * 通用表单 Modal
+ * ===================================================== */
+let formSubmit = null;
+
+function openFormModal(title, bodyHtml, onSubmit) {
+  $('#form-modal-title').textContent = title;
+  $('#form-modal-body').innerHTML = bodyHtml;
+  formSubmit = onSubmit;
+  $('#form-modal').classList.add('open');
+}
+$('#form-cancel').addEventListener('click', () => $('#form-modal').classList.remove('open'));
+$('#form-ok').addEventListener('click', () => { if (formSubmit) formSubmit(); });
+
+function field(id, label, inner, required = true) {
+  return `<div class="form-item">
+    <label class="form-label">${required ? '<span class="req">*</span>' : ''}${label}</label>
+    ${inner}
+    <div class="field-error" id="err-${id}"></div>
+  </div>`;
+}
+function setErr(id, msg) { $('#err-' + id).textContent = msg; $('#' + id).classList.toggle('error', !!msg); return !msg; }
+
+function openModelForm(m) {
+  const isEdit = !!m;
+  m = m || { name: '', provider: 'OpenAI 兼容', baseUrl: '', apiKey: '', contextWindow: 128000, status: 'enabled' };
+  openFormModal(isEdit ? '编辑模型' : '新增模型', `
+    ${field('f-mname', '模型名称', `<input class="input" id="f-mname" value="${esc(m.name)}" placeholder="例如 kimi-k2.5">`)}
+    ${field('f-mprovider', 'Provider', `<input class="input" id="f-mprovider" value="${esc(m.provider)}" placeholder="例如 Moonshot / OpenAI 兼容">`)}
+    ${field('f-mbase', 'Base URL', `<input class="input mono" id="f-mbase" value="${esc(m.baseUrl)}" placeholder="https://api.example.com/v1">`)}
+    ${field('f-mkey', 'API Key', `<input class="input mono" type="password" id="f-mkey" value="${isEdit ? '' : esc(m.apiKey)}" placeholder="${isEdit ? '留空表示不修改' : 'sk-...'}">`, !isEdit)}
+    ${field('f-mctx', '上下文窗口（tokens）', `<input class="input" type="number" min="1000" id="f-mctx" value="${m.contextWindow}">`)}
+  `, async () => {
+    const name = $('#f-mname').value.trim();
+    const provider = $('#f-mprovider').value.trim();
+    const baseUrl = $('#f-mbase').value.trim();
+    const key = $('#f-mkey').value.trim();
+    const ctx = Number($('#f-mctx').value);
+    let ok = setErr('f-mname', name ? '' : '请输入模型名称');
+    ok = setErr('f-mprovider', provider ? '' : '请输入 Provider') && ok;
+    ok = setErr('f-mbase', /^https?:\/\/.+/.test(baseUrl) ? '' : '请输入合法的 http(s) 地址') && ok;
+    ok = setErr('f-mkey', isEdit || key ? '' : '请输入 API Key') && ok;
+    ok = setErr('f-mctx', ctx >= 1000 ? '' : '上下文窗口至少 1000') && ok;
+    if (!ok) return;
+    if (!isEdit && mockModels.some(x => x.name === name)) { setErr('f-mname', '同名模型已存在'); return; }
+
+    const btn = $('#form-ok');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 验证连接中…';
+    await sleep(900);
+    btn.disabled = false; btn.textContent = '保存';
+
+    if (isEdit) {
+      Object.assign(m, { name, provider, baseUrl, contextWindow: ctx });
+      if (key) m.apiKey = key;
+      toast('success', '模型配置已更新，连接验证通过');
+    } else {
+      mockModels.push({ id: Date.now(), name, provider, baseUrl, apiKey: key, contextWindow: ctx, isDefault: false, status: 'enabled' });
+      toast('success', '模型已添加，连接验证通过');
+    }
+    $('#form-modal').classList.remove('open');
+    renderSettings(); renderModelSelect();
+  });
+}
+
+function openMcpForm(s) {
+  const isEdit = !!s;
+  s = s || { name: '', command: '' };
+  openFormModal(isEdit ? '编辑 MCP 服务器' : '新增 MCP 服务器', `
+    ${field('f-sname', '服务器名称', `<input class="input" id="f-sname" value="${esc(s.name)}" placeholder="例如 github">`)}
+    ${field('f-scmd', '启动命令', `<textarea class="input mono" id="f-scmd" rows="3" placeholder="npx -y @mcp/server-github">${esc(s.command)}</textarea>`)}
+    <div class="alert alert-info" style="margin-top:8px">ℹ️ 保存后会尝试拉起子进程并握手，失败会标记为「连接失败」。</div>
+  `, async () => {
+    const name = $('#f-sname').value.trim();
+    const cmd = $('#f-scmd').value.trim();
+    let ok = setErr('f-sname', name ? '' : '请输入名称');
+    ok = setErr('f-scmd', cmd ? '' : '请输入启动命令') && ok;
+    if (!ok) return;
+    if (!isEdit && mockMcpServers.some(x => x.name === name)) { setErr('f-sname', '同名服务器已存在'); return; }
+
+    const btn = $('#form-ok');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 连接握手中…';
+    await sleep(1200);
+    btn.disabled = false; btn.textContent = '保存';
+
+    if (isEdit) {
+      Object.assign(s, { name, command: cmd, status: 'connected' });
+      toast('success', '服务器配置已更新并重连成功');
+    } else {
+      mockMcpServers.push({ id: Date.now(), name, command: cmd, status: 'connected', tools: Math.floor(Math.random() * 8) + 3 });
+      toast('success', `服务器 ${name} 已连接`);
+    }
+    $('#form-modal').classList.remove('open');
+    renderSettings();
+  });
+}
+
+function openPermForm(r) {
+  const isEdit = !!r;
+  r = r || { tool: 'Bash', pattern: '', action: 'ask' };
+  const toolOpts = ['Bash', 'Edit', 'Write', 'Read', 'Grep', 'FetchURL', 'WebSearch'];
+  openFormModal(isEdit ? '编辑权限规则' : '新增权限规则', `
+    ${field('f-ptool', '工具', `<select class="select" id="f-ptool">${toolOpts.map(t => `<option ${t === r.tool ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
+    ${field('f-ppattern', '匹配模式（glob）', `<input class="input mono" id="f-ppattern" value="${esc(r.pattern)}" placeholder="例如 git push * 或 src/**/*.ts">`)}
+    ${field('f-paction', '动作', `<select class="select" id="f-paction">
+        <option value="allow" ${r.action === 'allow' ? 'selected' : ''}>allow — 静默放行</option>
+        <option value="ask" ${r.action === 'ask' ? 'selected' : ''}>ask — 弹审批确认</option>
+        <option value="deny" ${r.action === 'deny' ? 'selected' : ''}>deny — 直接拒绝</option>
+      </select>`)}
+  `, () => {
+    const tool = $('#f-ptool').value;
+    const pattern = $('#f-ppattern').value.trim();
+    const action = $('#f-paction').value;
+    if (!setErr('f-ppattern', pattern ? '' : '请输入匹配模式')) return;
+    if (isEdit) Object.assign(r, { tool, pattern, action });
+    else mockPermRules.push({ id: Date.now(), tool, pattern, action });
+    $('#form-modal').classList.remove('open');
+    renderSettings();
+    toast('success', isEdit ? '规则已更新' : '规则已添加');
+  });
+}
+
+/* =====================================================
+ * 项目：指定文件夹为项目 / 新建项目
+ * ===================================================== */
+function renderProjectChip() {
+  $('#proj-name').textContent = state.currentProject.name;
+  $('#proj-path').textContent = state.currentProject.path;
+  $('#proj-path').title = state.currentProject.path;
+  renderFileTree();
+}
+
+function switchProject(p, source) {
+  if (state.running) { toast('warning', 'Agent 运行中，请先停止当前任务再切换项目'); return false; }
+  state.currentProject = { name: p.name, path: p.path };
+  renderProjectChip();
+  $('#project-modal').classList.remove('open');
+  const s = getActiveSession();
+  if (s && s.messages.length) {
+    pushMsg({ kind: 'system', text: `📁 已${source === 'create' ? '创建并' : ''}切换项目到 ${p.name}（${p.path}）· Agent 的文件与命令操作将限定在该目录内` });
+    rerenderMsg(s.messages.length - 1);
+    scrollToBottom();
+  }
+  toast('success', `当前项目：${p.name}`);
+  return true;
+}
+
+function renderProjectBody() {
+  const body = $('#project-body');
+  if (state.projectTab === 'open') {
+    body.innerHTML = `
+      <div class="alert alert-info">ℹ️ 项目即工作目录：Agent 的文件读写、Shell 命令、会话归档都限定在项目目录内，防止越权操作其他文件。</div>
+      <div class="form-item" style="display:flex;gap:8px;align-items:flex-start">
+        <div style="flex:1">
+          <input class="input mono" id="open-path" placeholder="输入文件夹路径，如 ~/Documents/workspace/my-app">
+          <div class="field-error" id="err-open-path"></div>
+        </div>
+        <button class="btn btn-primary" id="btn-open-path">打开</button>
+      </div>
+      <div class="section-title">最近项目</div>
+      <div id="recent-list">
+        ${mockRecentProjects.map(p => `
+          <div class="recent-item ${p.path === state.currentProject.path ? 'current' : ''}" data-open-project="${esc(p.path)}">
+            <span class="r-icon">📁</span>
+            <div class="r-main">
+              <div class="r-name">${esc(p.name)} ${p.path === state.currentProject.path ? '<span class="tag tag-blue">当前</span>' : ''}</div>
+              <div class="r-path mono">${esc(p.path)}</div>
+            </div>
+            <span style="font-size:12px;color:var(--text-3);white-space:nowrap">${esc(p.lastOpened)} · ${p.sessions} 个会话</span>
+          </div>`).join('')}
+      </div>
+    `;
+  } else {
+    body.innerHTML = `
+      ${field('np-name', '项目名称', '<input class="input" id="np-name" placeholder="例如 my-new-app">')}
+      ${field('np-parent', '所在目录', '<input class="input mono" id="np-parent" value="~/Documents/workspace">')}
+      ${field('np-tpl', '脚手架模板', `<select class="select" id="np-tpl">${mockProjectTemplates.map(t => `<option value="${t.value}">${t.label}</option>`).join('')}</select>`)}
+      <div style="font-size:12px;color:var(--text-3);margin:-8px 0 8px" id="np-tpl-desc">${mockProjectTemplates[0].desc}</div>
+      <label class="checkbox-row"><input type="checkbox" id="np-git" checked> 初始化 git 仓库（推荐，checkpoint 回滚依赖它）</label>
+      <div style="margin-top:20px;display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" id="btn-create-project">创建并打开</button>
+      </div>
+    `;
+    $('#np-tpl').addEventListener('change', (e) => {
+      $('#np-tpl-desc').textContent = mockProjectTemplates.find(t => t.value === e.target.value).desc;
+    });
+  }
+}
+
+$('#btn-project').addEventListener('click', () => {
+  if (state.running) { toast('warning', 'Agent 运行中，请先停止当前任务再切换项目'); return; }
+  $('#project-modal').classList.add('open');
+  renderProjectBody();
+});
+$('#project-tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  $$('#project-tabs .tab').forEach(t => t.classList.toggle('active', t === tab));
+  state.projectTab = tab.dataset.ptab;
+  renderProjectBody();
+});
+$('#project-body').addEventListener('click', async (e) => {
+  /* 打开指定路径 */
+  if (e.target.closest('#btn-open-path')) {
+    const raw = $('#open-path').value.trim();
+    if (!raw) { setErr('open-path', '请输入文件夹路径'); return; }
+    if (!/^[~\/]/.test(raw)) { setErr('open-path', '路径需以 ~ 或 / 开头'); return; }
+    setErr('open-path', '');
+    const name = raw.replace(/\/+$/, '').split('/').pop() || raw;
+    const existing = mockRecentProjects.find(p => p.path === raw);
+    if (!existing) mockRecentProjects.unshift({ name, path: raw, lastOpened: '刚刚', sessions: 0 });
+    switchProject(existing || mockRecentProjects[0], 'open');
+    return;
+  }
+  /* 点击最近项目 */
+  const recent = e.target.closest('[data-open-project]');
+  if (recent) {
+    const p = mockRecentProjects.find(x => x.path === recent.dataset.openProject);
+    if (p.path === state.currentProject.path) { $('#project-modal').classList.remove('open'); return; }
+    switchProject(p, 'open');
+    return;
+  }
+  /* 创建新项目 */
+  if (e.target.closest('#btn-create-project')) {
+    const name = $('#np-name').value.trim();
+    const parent = $('#np-parent').value.trim().replace(/\/+$/, '');
+    const tpl = $('#np-tpl').value;
+    const git = $('#np-git').checked;
+    let ok = setErr('np-name', /^[a-zA-Z0-9._-]+$/.test(name) ? '' : '名称只能包含字母、数字、- _ .');
+    ok = setErr('np-parent', /^[~\/]/.test(parent) ? '' : '目录需以 ~ 或 / 开头') && ok;
+    if (!ok) return;
+    const path = parent + '/' + name;
+    if (mockRecentProjects.some(p => p.path === path)) { setErr('np-name', '该目录下已存在同名项目'); return; }
+
+    const btn = $('#btn-create-project');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 初始化项目…';
+    await sleep(1100);
+    btn.disabled = false; btn.textContent = '创建并打开';
+
+    const tplLabel = mockProjectTemplates.find(t => t.value === tpl).label;
+    mockRecentProjects.unshift({ name, path, lastOpened: '刚刚', sessions: 0 });
+    if (switchProject({ name, path }, 'create')) {
+      toast('success', `已用「${tplLabel}」模板创建 ${name}${git ? '，并初始化 git 仓库' : ''}`);
+    }
+  }
+});
+$('#project-body').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.id === 'open-path') $('#btn-open-path').click();
+});
+
+/* =====================================================
+ * 文件目录面板
+ * ===================================================== */
+const mockFileTree = [
+  { name: 'src', type: 'dir', children: [
+    { name: 'agent', type: 'dir', children: [
+      { name: 'loop.ts', type: 'file' },
+      { name: 'approval.ts', type: 'file' },
+      { name: 'context.ts', type: 'file' },
+    ]},
+    { name: 'tools', type: 'dir', children: [
+      { name: 'bash.ts', type: 'file' },
+      { name: 'edit.ts', type: 'file' },
+      { name: 'read.ts', type: 'file' },
+      { name: 'grep.ts', type: 'file' },
+    ]},
+    { name: 'ui', type: 'dir', children: [
+      { name: 'tui.ts', type: 'file' },
+      { name: 'diffview.ts', type: 'file' },
+    ]},
+    { name: 'index.ts', type: 'file' },
+  ]},
+  { name: 'tests', type: 'dir', children: [
+    { name: 'approval.spec.ts', type: 'file' },
+    { name: 'loop.spec.ts', type: 'file' },
+  ]},
+  { name: 'package.json', type: 'file' },
+  { name: 'AGENTS.md', type: 'file' },
+  { name: 'README.md', type: 'file' },
+];
+const mockFileContents = {
+  'src/agent/approval.ts': 'export async function requestApproval(\n  call: ToolCall,\n  signal?: AbortSignal,\n): Promise<Decision> {\n  return new Promise((resolve) => {\n    signal?.addEventListener("abort", () => resolve("abort"), { once: true });\n    ui.renderApprovalCard(call, (decision) => {\n      resolve(decision);\n    });\n  });\n}\n\nexport function cancelPending(controller: AbortController) {\n  controller.abort();\n}',
+  'src/agent/loop.ts': 'export async function agentLoop(task: string) {\n  const controller = new AbortController();\n  ui.onInterrupt(() => controller.abort());\n\n  while (true) {\n    const res = await llm.chat({ messages, tools, signal: controller.signal });\n    if (!res.toolCalls.length) return res.text;\n    for (const call of res.toolCalls) {\n      const decision = await requestApproval(call, controller.signal);\n      if (decision === "abort") return "已中断";\n      messages.push(await runTool(call, decision));\n    }\n  }\n}',
+  'package.json': '{\n  "name": "cyan",\n  "version": "0.1.0",\n  "type": "module",\n  "bin": { "cyan": "./dist/cli.js" },\n  "scripts": {\n    "dev": "tsx src/index.ts",\n    "build": "tsup",\n    "test": "vitest run"\n  }\n}',
+  'AGENTS.md': '# 项目约定\n\n- 分层：agent / tools / ui 互不越界\n- 所有写操作必须走审批管道\n- 测试：vitest，改动必须附带回归用例',
+};
+let previewPath = null;
+
+function ftIcon(name) {
+  if (name.endsWith('.ts')) return '🔷';
+  if (name.endsWith('.json')) return '🧾';
+  if (name.endsWith('.md')) return '📝';
+  return '📄';
+}
+const expandedDirs = new Set(['src', 'src/agent']);
+
+function treeHtml(nodes, prefix, depth) {
+  return nodes.map(n => {
+    const path = prefix ? prefix + '/' + n.name : n.name;
+    const pad = `style="padding-left:${8 + depth * 16}px"`;
+    if (n.type === 'dir') {
+      const open = expandedDirs.has(path);
+      return `<div class="ft-row ft-dir ${open ? 'open' : ''}" data-dir="${esc(path)}" ${pad}>
+          <span class="ft-caret">▶</span><span class="ft-icon">${open ? '📂' : '📁'}</span><span class="ft-name">${esc(n.name)}</span>
+        </div>
+        <div class="ft-children ${open ? 'open' : ''}">${open ? treeHtml(n.children, path, depth + 1) : ''}</div>`;
+    }
+    return `<div class="ft-row ft-file" data-file="${esc(path)}" ${pad}>
+        <span class="ft-caret"></span><span class="ft-icon">${ftIcon(n.name)}</span><span class="ft-name">${esc(n.name)}</span>
+      </div>`;
+  }).join('');
+}
+
+function renderFileTree() {
+  $('#fp-root').textContent = state.currentProject.name;
+  $('#fp-root').title = state.currentProject.path;
+  $('#file-tree').innerHTML = treeHtml(mockFileTree, '', 0);
+}
+
+$('#file-tree').addEventListener('click', (e) => {
+  const dir = e.target.closest('[data-dir]');
+  if (dir) {
+    const p = dir.dataset.dir;
+    expandedDirs.has(p) ? expandedDirs.delete(p) : expandedDirs.add(p);
+    renderFileTree();
+    return;
+  }
+  const file = e.target.closest('[data-file]');
+  if (file) {
+    previewPath = file.dataset.file;
+    $('#file-title').textContent = previewPath;
+    $('#file-preview').textContent = mockFileContents[previewPath]
+      || `// ${previewPath}\n// 原型中仅提供部分文件的预览内容`;
+    $('#file-modal').classList.add('open');
+  }
+});
+$('#file-close').addEventListener('click', () => $('#file-modal').classList.remove('open'));
+$('#file-ref').addEventListener('click', () => {
+  const input = $('#chat-input');
+  input.value = (input.value ? input.value + ' ' : '') + '@' + previewPath + ' ';
+  $('#file-modal').classList.remove('open');
+  input.focus();
+  toast('success', `已引用 ${previewPath}`);
+});
+$('#fp-refresh').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.innerHTML = '<span class="spinner dark"></span>';
+  await sleep(600);
+  btn.innerHTML = '⟳';
+  renderFileTree();
+  toast('success', '文件目录已刷新');
+});
+$('#fp-close').addEventListener('click', () => $('#file-panel').classList.add('collapsed'));
+$('#btn-files').addEventListener('click', () => $('#file-panel').classList.toggle('collapsed'));
+
+/* =====================================================
+ * 侧栏导航 & 空状态交互
+ * ===================================================== */
+$('#nav-mcp').addEventListener('click', () => {
+  state.settingsTab = 'mcp';
+  $$('#settings-tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'mcp'));
+  $('#settings-modal').classList.add('open');
+  renderSettings();
+});
+$('#btn-attach').addEventListener('click', () => toast('info', '附件上传：原型暂未实现'));
+$('#chat-inner').addEventListener('click', (e) => {
+  if (e.target.closest('#mp-work')) toast('info', '工作模式（多步任务编排）：原型敬请期待');
+});
+
+/* =====================================================
+ * 初始化
+ * ===================================================== */
+renderModelSelect();
+renderProjectChip();
+renderSessions();
+renderDrawer();
+if (window.innerWidth <= 860) { $('#sidebar').classList.add('collapsed'); $('#fab-expand').classList.add('show'); }
+state.activeId = 's1';
+renderSessions();
+renderChat();
+</script>
+</body>
+</html>

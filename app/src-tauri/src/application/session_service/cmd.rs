@@ -1,0 +1,26 @@
+//! 会话命令对象（adapter Request → Cmd 后传入）。
+
+/// 创建会话命令
+#[derive(Debug, Clone)]
+pub struct CreateSessionCmd {
+    /// 项目路径（须已 open_project 注册）
+    pub project_path: String,
+}
+
+/// 删除会话命令（软删）
+#[derive(Debug, Clone)]
+pub struct DeleteSessionCmd {
+    /// 会话 id
+    pub session_id: i64,
+}
+
+/// 追加消息命令（AgentService 内部复用）
+#[derive(Debug, Clone)]
+pub struct AppendMessageCmd {
+    /// 会话 id
+    pub session_id: i64,
+    /// 消息类型（user/assistant/tool/approval/system）
+    pub kind: String,
+    /// JSON 载荷
+    pub payload: String,
+}
