@@ -16,6 +16,13 @@ import { newNodeId, useSessionStore } from './sessionStore';
 import { useProjectStore } from './projectStore';
 import { useConfigStore } from './configStore';
 
+/**
+ * Agent 运行阶段（派生展示状态）：
+ * thinking（等待首个响应/工具间思考）→ streaming（文本/思考流出）→ tool（工具执行）
+ * → approval（等待审批）→ thinking …；run_end / 出错 / 中断归 null。
+ */
+export type AgentPhase = 'thinking' | 'streaming' | 'tool' | 'approval' | null;
+
 /** 审批请求中（等待用户决断）的载荷 */
 interface PendingApproval {
   callId: string;
@@ -36,6 +43,8 @@ interface AgentState {
   ctxPercent: number;
   tokens: Tokens;
   pendingApproval: PendingApproval | null;
+  /** 当前运行阶段（驱动「正在思考」loading 气泡） */
+  phase: AgentPhase;
 
   /** 发送任务；返回是否已被受理（受理后输入框可清空） */
   send: (text: string) => Promise<boolean>;
@@ -61,6 +70,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   ctxPercent: 0,
   tokens: EMPTY_TOKENS,
   pendingApproval: null,
+  phase: null,
 
   send: async (text) => {
     const trimmed = text.trim();
@@ -94,12 +104,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       return false;
     }
     useSessionStore.getState().pushNode({ id: newNodeId(), kind: 'user', text: trimmed });
-    set({ runState: 'running', runSessionId: sessionId });
+    set({ runState: 'running', runSessionId: sessionId, phase: 'thinking' });
     try {
       await sendTask(sessionId, trimmed, model, cfg.permMode);
       return true;
     } catch (e) {
-      set({ runState: 'idle', runSessionId: null });
+      set({ runState: 'idle', runSessionId: null, phase: null });
       useSessionStore.getState().pushNode({
         id: newNodeId(),
         kind: 'system',
@@ -148,6 +158,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       todos: [],
       changes: [],
       pendingApproval: null,
+      phase: null,
       ctxPercent: summary?.ctx ?? 0,
       tokens: summary?.tokens ?? EMPTY_TOKENS,
     });
@@ -157,9 +168,15 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const ss = useSessionStore.getState();
     switch (evt.type) {
       case 'text_delta':
+        set({ phase: 'streaming' });
         ss.appendDelta(evt.delta);
         break;
+      case 'thinking_delta':
+        set({ phase: 'streaming' });
+        ss.appendThinkingDelta(evt.delta);
+        break;
       case 'tool_start':
+        set({ phase: 'tool' });
         ss.endStreaming();
         ss.pushNode({
           id: newNodeId(),
@@ -171,6 +188,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         });
         break;
       case 'tool_end':
+        set({ phase: 'thinking' });
         ss.updateTool(evt.callId, {
           status: evt.status,
           output: evt.output,
@@ -183,6 +201,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         ss.endStreaming();
         set({
           runState: 'waiting_approval',
+          phase: 'approval',
           pendingApproval: { callId: evt.callId, tool: evt.tool, arg: evt.arg, reason: evt.reason },
         });
         ss.pushNode({
@@ -204,7 +223,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           abort: 'rejected',
         };
         ss.updateApproval(evt.callId, map[evt.decision] ?? 'rejected');
-        set({ pendingApproval: null, runState: 'running' });
+        set({ pendingApproval: null, runState: 'running', phase: 'thinking' });
         if (evt.decision === 'always') {
           // 「总是允许」后端已写入 allow 规则，刷新权限规则表（PRD 验收 3）
           void useConfigStore.getState().loadPermRules();
@@ -239,7 +258,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         break;
       case 'run_end': {
         ss.endStreaming();
-        set({ pendingApproval: null, runState: evt.result === 'error' ? 'error' : 'idle' });
+        set({
+          pendingApproval: null,
+          runState: evt.result === 'error' ? 'error' : 'idle',
+          phase: null,
+        });
         if (evt.result === 'done') {
           ss.pushNode({
             id: newNodeId(),

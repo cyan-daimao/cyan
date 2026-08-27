@@ -6,6 +6,7 @@ import { AssistantText } from '../../../components/message/AssistantText';
 import { SystemDivider } from '../../../components/message/SystemDivider';
 import { ToolCard } from '../../../components/message/ToolCard';
 import { ApprovalCard } from '../../../components/message/ApprovalCard';
+import { ThinkingBubble } from '../../../components/message/ThinkingBubble';
 
 function MessageNode({ node }: { node: ChatNode }) {
   const decide = useAgentStore((s) => s.decide);
@@ -13,7 +14,7 @@ function MessageNode({ node }: { node: ChatNode }) {
     case 'user':
       return <UserBubble text={node.text} />;
     case 'assistant':
-      return <AssistantText text={node.text} streaming={node.streaming} />;
+      return <AssistantText text={node.text} thinking={node.thinking} streaming={node.streaming} />;
     case 'system':
       return <SystemDivider text={node.text} />;
     case 'tool':
@@ -47,6 +48,7 @@ interface MessageListProps {
 
 /** 消息流：react-virtuoso 虚拟列表（长会话不卡），自动跟随底部 */
 export function MessageList({ messages }: MessageListProps) {
+  const phase = useAgentStore((s) => s.phase);
   return (
     <Virtuoso
       data={messages}
@@ -59,7 +61,13 @@ export function MessageList({ messages }: MessageListProps) {
       )}
       components={{
         Header: () => <div style={{ height: 24 }} />,
-        Footer: () => <div style={{ height: 24 }} />,
+        // 发送后到首个响应之间在消息流末尾渲染「正在思考…」气泡
+        Footer: () => (
+          <div className="chat-inner" style={{ paddingTop: 0, paddingBottom: 0 }}>
+            {phase === 'thinking' ? <ThinkingBubble /> : null}
+            <div style={{ height: 24 }} />
+          </div>
+        ),
       }}
     />
   );

@@ -14,15 +14,23 @@ import { errText, toast } from '../utils/feedback';
 let nodeSeq = 0;
 export const newNodeId = () => `n${(nodeSeq += 1)}`;
 
-/* text_delta 流式缓冲：token 级频率的事件用 requestAnimationFrame 节流合并（TECH_DESIGN 2.4） */
-let deltaBuf = '';
-let rafId: number | null = null;
+/* text_delta / thinking_delta 流式缓冲：token 级频率的事件用 requestAnimationFrame 节流合并。
+ * 两条缓冲独立（text 与 thinking 分开），避免相互覆盖。 */
+let textBuf = '';
+let textRaf: number | null = null;
+let thinkBuf = '';
+let thinkRaf: number | null = null;
 
 function clearDeltaBuffer() {
-  deltaBuf = '';
-  if (rafId !== null) {
-    cancelAnimationFrame(rafId);
-    rafId = null;
+  textBuf = '';
+  thinkBuf = '';
+  if (textRaf !== null) {
+    cancelAnimationFrame(textRaf);
+    textRaf = null;
+  }
+  if (thinkRaf !== null) {
+    cancelAnimationFrame(thinkRaf);
+    thinkRaf = null;
   }
 }
 
@@ -57,7 +65,12 @@ function dtoToNode(m: MessageDTO): ChatNode | null {
     case 'user':
       return { id, kind: 'user', text: String(p.text ?? '') };
     case 'assistant':
-      return { id, kind: 'assistant', text: String(p.text ?? '') };
+      return {
+        id,
+        kind: 'assistant',
+        text: String(p.text ?? ''),
+        thinking: typeof p.thinking === 'string' && p.thinking ? p.thinking : undefined,
+      };
     case 'system':
       return { id, kind: 'system', text: String(p.text ?? '') };
     case 'tool': {
@@ -112,7 +125,9 @@ interface SessionState {
   /* ---- 运行期消息流操作（供 agentStore 事件分发调用） ---- */
   pushNode: (node: ChatNode) => void;
   appendDelta: (delta: string) => void;
+  appendThinkingDelta: (delta: string) => void;
   flushDelta: () => void;
+  flushThinking: () => void;
   endStreaming: () => void;
   updateTool: (
     callId: string,
@@ -199,27 +214,38 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   pushNode: (node) => {
     get().flushDelta();
+    get().flushThinking();
     set({ messages: [...get().messages, node] });
   },
 
   appendDelta: (delta) => {
-    deltaBuf += delta;
-    if (rafId === null) {
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
+    textBuf += delta;
+    if (textRaf === null) {
+      textRaf = requestAnimationFrame(() => {
+        textRaf = null;
         get().flushDelta();
       });
     }
   },
 
-  flushDelta: () => {
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
+  appendThinkingDelta: (delta) => {
+    thinkBuf += delta;
+    if (thinkRaf === null) {
+      thinkRaf = requestAnimationFrame(() => {
+        thinkRaf = null;
+        get().flushThinking();
+      });
     }
-    if (!deltaBuf) return;
-    const text = deltaBuf;
-    deltaBuf = '';
+  },
+
+  flushDelta: () => {
+    if (textRaf !== null) {
+      cancelAnimationFrame(textRaf);
+      textRaf = null;
+    }
+    if (!textBuf) return;
+    const text = textBuf;
+    textBuf = '';
     const msgs = [...get().messages];
     const last = msgs[msgs.length - 1];
     if (last && last.kind === 'assistant' && last.streaming) {
@@ -230,8 +256,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ messages: msgs });
   },
 
+  flushThinking: () => {
+    if (thinkRaf !== null) {
+      cancelAnimationFrame(thinkRaf);
+      thinkRaf = null;
+    }
+    if (!thinkBuf) return;
+    const thinking = thinkBuf;
+    thinkBuf = '';
+    const msgs = [...get().messages];
+    const last = msgs[msgs.length - 1];
+    if (last && last.kind === 'assistant' && last.streaming) {
+      msgs[msgs.length - 1] = { ...last, thinking: (last.thinking ?? '') + thinking };
+    } else {
+      msgs.push({ id: newNodeId(), kind: 'assistant', text: '', thinking, streaming: true });
+    }
+    set({ messages: msgs });
+  },
+
   endStreaming: () => {
     get().flushDelta();
+    get().flushThinking();
     const msgs = [...get().messages];
     const last = msgs[msgs.length - 1];
     if (last && last.kind === 'assistant' && last.streaming) {
@@ -242,6 +287,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   updateTool: (callId, patch) => {
     get().flushDelta();
+    get().flushThinking();
     set({
       messages: get().messages.map((n) =>
         n.kind === 'tool' && n.callId === callId ? { ...n, ...patch } : n,
@@ -251,6 +297,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   updateApproval: (callId, state) => {
     get().flushDelta();
+    get().flushThinking();
     set({
       messages: get().messages.map((n) =>
         n.kind === 'approval' && n.callId === callId ? { ...n, state } : n,

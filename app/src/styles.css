@@ -1204,3 +1204,90 @@ pre {
   object-fit: cover;
   box-shadow: none !important;
 }
+
+/* ============ 思考过程 & 思考 loading ============ */
+/* 「正在思考…」三点跳动 */
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+}
+
+.thinking-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: dotBounce 1.2s infinite;
+}
+
+.thinking-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes dotBounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+.thinking-hint {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* 思考过程区块：浅灰底 / 斜体 / 左侧竖线的引用块风格 */
+.thinking-block {
+  background: #f7f8fa;
+  border-left: 3px solid #d9d9e0;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.thinking-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.thinking-head:hover {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--text-2);
+}
+
+.thinking-caret {
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+
+.thinking-head.open .thinking-caret {
+  transform: rotate(90deg);
+}
+
+.thinking-content {
+  padding: 2px 12px 10px;
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.7;
+  color: var(--text-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
