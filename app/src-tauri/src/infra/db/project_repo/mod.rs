@@ -132,4 +132,17 @@ impl ProjectRepository for ProjectRepositoryImpl {
         .await?;
         Ok(())
     }
+
+    async fn soft_delete(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_project SET deleted_at = ?, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }

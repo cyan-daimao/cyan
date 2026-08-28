@@ -14,3 +14,6 @@ export const createProject = (
   template: ProjectTemplate,
   gitInit: boolean,
 ) => call<ProjectDTO>('create_project', { request: { name, parent, template, gitInit } });
+
+export const removeProject = (path: string) =>
+  call<void>('remove_project', { request: { path } });

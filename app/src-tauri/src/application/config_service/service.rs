@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::domain::config::{
     McpRepository, McpServer, ModelConfig, ModelRepository, ModelStatus, PermAction,
-    PermRuleRepository, PermissionRule,
+    PermRuleRepository, PermissionRule, RuleScope,
 };
 use crate::error::ServiceError;
 use crate::infra::db::now_local;
@@ -36,9 +36,15 @@ pub trait ConfigService: Send + Sync {
     async fn toggle_mcp_server(&self, cmd: ToggleMcpCmd) -> Result<McpServerBO, ServiceError>;
     /// 删除 MCP 服务器
     async fn delete_mcp_server(&self, cmd: DeleteMcpCmd) -> Result<(), ServiceError>;
-    /// 权限规则列表（sort 升序）
-    async fn list_perm_rules(&self) -> Result<Vec<PermRuleBO>, ServiceError>;
-    /// 保存权限规则（按 tool+pattern upsert）
+    /// 全局权限规则列表（设置页管理）
+    async fn list_global_rules(&self) -> Result<Vec<PermRuleBO>, ServiceError>;
+    /// 会话可见权限规则列表（全局 + 项目 + 会话，sort 升序）
+    async fn list_visible_rules(
+        &self,
+        session_id: i64,
+        project_id: i64,
+    ) -> Result<Vec<PermRuleBO>, ServiceError>;
+    /// 保存权限规则（按作用域 upsert）
     async fn save_perm_rule(&self, cmd: SavePermRuleCmd) -> Result<PermRuleBO, ServiceError>;
     /// 删除权限规则
     async fn delete_perm_rule(&self, cmd: DeletePermRuleCmd) -> Result<(), ServiceError>;
@@ -210,8 +216,17 @@ impl ConfigService for ConfigServiceImpl {
         Ok(())
     }
 
-    async fn list_perm_rules(&self) -> Result<Vec<PermRuleBO>, ServiceError> {
-        let rules = self.perm_repo.list().await?;
+    async fn list_global_rules(&self) -> Result<Vec<PermRuleBO>, ServiceError> {
+        let rules = self.perm_repo.list_global().await?;
+        Ok(rules.into_iter().map(PermRuleBO::from).collect())
+    }
+
+    async fn list_visible_rules(
+        &self,
+        session_id: i64,
+        project_id: i64,
+    ) -> Result<Vec<PermRuleBO>, ServiceError> {
+        let rules = self.perm_repo.list_visible(session_id, project_id).await?;
         Ok(rules.into_iter().map(PermRuleBO::from).collect())
     }
 
@@ -219,26 +234,62 @@ impl ConfigService for ConfigServiceImpl {
         let action = PermAction::parse(&cmd.action)
             .ok_or_else(|| ServiceError::validation(format!("非法权限动作：{}", cmd.action)))?;
         let now = now_local();
-        let mut rule = match self
-            .perm_repo
-            .find_by_tool_pattern(&cmd.tool, &cmd.pattern)
-            .await?
-        {
-            Some(mut existing) => {
-                existing.action = action;
-                existing.sort = cmd.sort;
-                existing.updated_at = now;
-                existing
-            }
-            None => PermissionRule {
-                id: 0,
-                tool: cmd.tool.clone(),
-                pattern: cmd.pattern.clone(),
-                action,
-                sort: cmd.sort,
-                created_at: now,
-                updated_at: now,
+        // 编辑：按 id 更新，沿用原范围；新建：按 scope 校验并定位作用域
+        let mut rule = match cmd.id {
+            Some(id) => match self.perm_repo.find_by_id(id).await? {
+                Some(mut existing) => {
+                    existing.action = action;
+                    existing.sort = cmd.sort;
+                    existing.updated_at = now;
+                    existing
+                }
+                None => return Err(ServiceError::not_found(format!("权限规则不存在：{id}"))),
             },
+            None => {
+                let scope = RuleScope::parse(&cmd.scope)
+                    .ok_or_else(|| ServiceError::validation(format!("非法规则作用域：{}", cmd.scope)))?;
+                let (project_id, session_id) = match scope {
+                    RuleScope::Global => (None, None),
+                    RuleScope::Project => (
+                        Some(cmd.project_id.ok_or_else(|| {
+                            ServiceError::validation("项目级规则必须指定项目")
+                        })?),
+                        None,
+                    ),
+                    RuleScope::Session => (
+                        Some(cmd.project_id.ok_or_else(|| {
+                            ServiceError::validation("会话级规则必须指定项目")
+                        })?),
+                        Some(cmd.session_id.ok_or_else(|| {
+                            ServiceError::validation("会话级规则必须指定会话")
+                        })?),
+                    ),
+                };
+                match self
+                    .perm_repo
+                    .find_by_tool_pattern(&cmd.tool, &cmd.pattern, project_id, session_id)
+                    .await?
+                {
+                    Some(mut existing) => {
+                        existing.action = action;
+                        existing.sort = cmd.sort;
+                        existing.updated_at = now;
+                        existing
+                    }
+                    None => PermissionRule {
+                        id: 0,
+                        project_id,
+                        session_id,
+                        tool: cmd.tool.clone(),
+                        pattern: cmd.pattern.clone(),
+                        action,
+                        sort: cmd.sort,
+                        plugin_origin: None,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                }
+            }
         };
         rule.validate()?;
         if rule.id == 0 {

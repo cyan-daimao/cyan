@@ -22,6 +22,8 @@ pub struct McpServerDO {
     pub tools: i64,
     /// 最近失败原因
     pub last_error: Option<String>,
+    /// 来源插件名（NULL = 用户自建）
+    pub plugin_origin: Option<String>,
     /// 创建人
     pub created_by: String,
     /// 更新人
@@ -45,6 +47,7 @@ impl TryFrom<McpServerDO> for McpServer {
             status: McpStatus::parse(&d.status),
             tools: d.tools,
             last_error: d.last_error,
+            plugin_origin: d.plugin_origin,
             created_at: parse_time(&d.created_at)?,
             updated_at: parse_time(&d.updated_at)?,
         })
@@ -52,7 +55,7 @@ impl TryFrom<McpServerDO> for McpServer {
 }
 
 const SELECT_COLS: &str =
-    "id, name, command, status, tools, last_error, created_by, updated_by, created_at, updated_at, deleted_at";
+    "id, name, command, status, tools, last_error, plugin_origin, created_by, updated_by, created_at, updated_at, deleted_at";
 
 /// MCP 服务器仓储 SQLx 实现
 pub struct McpRepositoryImpl {
@@ -93,14 +96,15 @@ impl McpRepository for McpRepositoryImpl {
         server.updated_at = now;
         let id = sqlx::query(
             "INSERT INTO cyan_mcp_server
-                (name, command, status, tools, last_error, created_by, updated_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'local', 'local', ?, ?)",
+                (name, command, status, tools, last_error, plugin_origin, created_by, updated_by, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'local', 'local', ?, ?)",
         )
         .bind(&server.name)
         .bind(&server.command)
         .bind(server.status.as_str())
         .bind(server.tools)
         .bind(&server.last_error)
+        .bind(&server.plugin_origin)
         .bind(fmt_time(&now))
         .bind(fmt_time(&now))
         .execute(&self.pool)

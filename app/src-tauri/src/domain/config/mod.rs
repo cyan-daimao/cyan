@@ -7,5 +7,5 @@ pub mod repository;
 
 pub use mcp::{McpServer, McpStatus};
 pub use model::{ModelConfig, ModelStatus};
-pub use perm_rule::{PermAction, PermissionRule};
+pub use perm_rule::{PermAction, PermissionRule, RuleScope};
 pub use repository::{McpRepository, ModelRepository, PermRuleRepository};

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::adapter::dto::{
-    CreateSessionRequest, DeleteSessionRequest, GetSessionRequest, ListSessionRequest, SessionDTO,
-    SessionSummaryDTO,
+    CreateSessionRequest, DeleteSessionRequest, GetSessionRequest, ListSessionRequest,
+    ProjectTokenUsageDTO, ProjectTokenUsageRequest, SessionDTO, SessionSummaryDTO,
 };
 use crate::application::session_service::SessionService;
 use crate::error::ServiceError;
@@ -48,4 +48,14 @@ pub async fn delete_session(
     request: DeleteSessionRequest,
 ) -> Result<(), ServiceError> {
     svc.delete_session(request.into()).await
+}
+
+/// 项目级 token 用量聚合
+#[tauri::command]
+pub async fn project_token_usage(
+    svc: State<'_, Arc<dyn SessionService>>,
+    request: ProjectTokenUsageRequest,
+) -> Result<ProjectTokenUsageDTO, ServiceError> {
+    let bo = svc.token_usage(request.into()).await?;
+    Ok(ProjectTokenUsageDTO::from(bo))
 }

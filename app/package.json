@@ -12,11 +12,14 @@
   "dependencies": {
     "@ant-design/icons": "^5.5.2",
     "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
     "antd": "^5.22.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^6.28.0",
     "react-virtuoso": "^4.12.3",
+    "remark-gfm": "^4.0.1",
     "zustand": "^5.0.2"
   },
   "devDependencies": {

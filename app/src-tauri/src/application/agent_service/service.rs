@@ -9,7 +9,7 @@ use crate::domain::agent::{
     AgentRun, ApprovalDecision, CheckpointGateway, CheckpointRepository, LlmGateway, PermMode,
     RunEventSink, ToolExecutor,
 };
-use crate::domain::config::{ModelRepository, PermRuleRepository, PermissionRule};
+use crate::domain::config::{ModelRepository, PermRuleRepository, PermissionRule, RuleScope};
 use crate::domain::project::ProjectRepository;
 use crate::domain::session::{Message, MessageKind, MessageRepository, SessionRepository};
 use crate::domain::shared::ProjectPath;
@@ -126,7 +126,12 @@ impl AgentService for AgentServiceImpl {
         let api_key = secret::load_api_key(&model.name)
             .map_err(|_| ServiceError::validation(format!("模型 {} 未配置 API Key", model.name)))?;
         let mode = PermMode::parse(&cmd.perm_mode);
-        let rules = self.ctx.perm_repo.list().await?;
+        // 三级作用域规则：全局 + 本项目 + 本会话
+        let rules = self
+            .ctx
+            .perm_repo
+            .list_visible(cmd.session_id, session.project_id)
+            .await?;
 
         // 首条任务生成标题 + 用户消息落库
         session.apply_first_task_title(&cmd.text);
@@ -153,8 +158,9 @@ impl AgentService for AgentServiceImpl {
         let ctx = self.ctx.clone();
         let run_clone = run.clone();
         let session_id = session.id;
+        let disabled = cmd.disabled_tools.clone();
         tokio::spawn(async move {
-            run_loop(ctx, run_clone, session, root, model, api_key, rules, mode).await;
+            run_loop(ctx, run_clone, session, root, model, api_key, rules, mode, disabled).await;
             runs.lock().expect("runs 锁中毒").remove(&session_id);
         });
         Ok(())
@@ -178,13 +184,32 @@ impl AgentService for AgentServiceImpl {
         let Some((tool, arg)) = run.approve(&cmd.call_id, decision) else {
             return Ok(());
         };
-        // 「总是允许」自动推导规则落库（upsert by tool+pattern）
+        // 「总是允许」自动推导规则落库（按用户选择的作用域 upsert，缺省本会话）
         if decision == ApprovalDecision::Always {
+            let scope = cmd
+                .always_scope
+                .as_deref()
+                .and_then(RuleScope::parse)
+                .unwrap_or(RuleScope::Session);
             let mut rule = PermissionRule::always_allow_from(&tool, &arg);
+            match scope {
+                RuleScope::Global => {}
+                RuleScope::Project | RuleScope::Session => {
+                    let session = self
+                        .session_repo
+                        .find_by_id(cmd.session_id)
+                        .await?
+                        .ok_or_else(|| ServiceError::not_found("会话不存在"))?;
+                    rule.project_id = Some(session.project_id);
+                    if scope == RuleScope::Session {
+                        rule.session_id = Some(cmd.session_id);
+                    }
+                }
+            }
             match self
                 .ctx
                 .perm_repo
-                .find_by_tool_pattern(&rule.tool, &rule.pattern)
+                .find_by_tool_pattern(&rule.tool, &rule.pattern, rule.project_id, rule.session_id)
                 .await?
             {
                 Some(_) => {}

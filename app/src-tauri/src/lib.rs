@@ -11,21 +11,26 @@ use std::sync::Arc;
 use tauri::Manager;
 
 use adapter::command::{
-    agent_command, config_command, file_command, project_command, session_command,
+    agent_command, config_command, file_command, plugin_command, project_command, session_command,
+    skill_command,
 };
 use adapter::event::TauriEventSink;
 use application::agent_service::{AgentService, AgentServiceImpl};
 use application::config_service::{ConfigService, ConfigServiceImpl};
+use application::plugin_service::{PluginService, PluginServiceImpl};
 use application::project_service::{ProjectService, ProjectServiceImpl};
 use application::session_service::{SessionService, SessionServiceImpl};
+use application::skill_service::{SkillService, SkillServiceImpl};
 use domain::agent::{CheckpointGateway, LlmGateway, RunEventSink, ToolExecutor};
 use domain::config::{McpRepository, ModelRepository, PermRuleRepository};
+use domain::plugin::PluginRepository;
 use domain::project::ProjectRepository;
 use domain::session::{MessageRepository, SessionRepository};
 use infra::db::checkpoint_repo::CheckpointRepositoryImpl;
 use infra::db::mcp_repo::McpRepositoryImpl;
 use infra::db::model_repo::ModelRepositoryImpl;
 use infra::db::perm_rule_repo::PermRuleRepositoryImpl;
+use infra::db::plugin_repo::PluginRepositoryImpl;
 use infra::db::project_repo::ProjectRepositoryImpl;
 use infra::db::session_repo::{MessageRepositoryImpl, SessionRepositoryImpl};
 use infra::git::GitCheckpointGateway;
@@ -55,6 +60,7 @@ fn init_tracing() {
 /// 启动 Tauri 应用
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             init_tracing();
             tracing::info!("cyan 启动，初始化数据库");
@@ -73,7 +79,9 @@ pub fn run() {
             let mcp_repo: Arc<dyn McpRepository> = Arc::new(McpRepositoryImpl::new(pool.clone()));
             let perm_repo: Arc<dyn PermRuleRepository> =
                 Arc::new(PermRuleRepositoryImpl::new(pool.clone()));
-            let checkpoint_repo = Arc::new(CheckpointRepositoryImpl::new(pool));
+            let checkpoint_repo = Arc::new(CheckpointRepositoryImpl::new(pool.clone()));
+            let plugin_repo: Arc<dyn PluginRepository> =
+                Arc::new(PluginRepositoryImpl::new(pool));
 
             // infra → 端口实现
             let llm: Arc<dyn LlmGateway> = Arc::new(OpenAiClient::new());
@@ -92,8 +100,25 @@ pub fn run() {
                 Arc::new(ProjectServiceImpl::new(project_repo.clone()));
             let config_service: Arc<dyn ConfigService> = Arc::new(ConfigServiceImpl::new(
                 model_repo.clone(),
-                mcp_repo,
+                mcp_repo.clone(),
                 perm_repo.clone(),
+            ));
+            // 插件根目录 `~/.cyan/plugins`（测试经构造注入隔离）
+            let plugins_dir = infra::db::datasource::cyan_home()
+                .map(|h| h.join("plugins"))
+                .unwrap_or_else(|_| std::path::PathBuf::from(".cyan/plugins"));
+            let plugin_service: Arc<dyn PluginService> = Arc::new(PluginServiceImpl::new(
+                plugin_repo.clone(),
+                mcp_repo.clone(),
+                perm_repo.clone(),
+                plugins_dir.clone(),
+            ));
+            let skill_service: Arc<dyn SkillService> = Arc::new(SkillServiceImpl::new(
+                plugin_repo,
+                plugins_dir,
+                infra::db::datasource::cyan_home()
+                    .map(|h| h.join("skills"))
+                    .unwrap_or_else(|_| std::path::PathBuf::from(".cyan/skills")),
             ));
             let agent_service: Arc<dyn AgentService> = Arc::new(AgentServiceImpl::new(
                 session_repo,
@@ -111,6 +136,8 @@ pub fn run() {
             app.manage(session_service);
             app.manage(project_service);
             app.manage(config_service);
+            app.manage(plugin_service);
+            app.manage(skill_service);
             app.manage(agent_service);
             tracing::info!("cyan 初始化完成");
             Ok(())
@@ -121,6 +148,7 @@ pub fn run() {
             session_command::get_session,
             session_command::create_session,
             session_command::delete_session,
+            session_command::project_token_usage,
             // Agent
             agent_command::send_task,
             agent_command::interrupt_run,
@@ -130,6 +158,7 @@ pub fn run() {
             project_command::list_projects,
             project_command::open_project,
             project_command::create_project,
+            project_command::remove_project,
             // 文件
             file_command::file_tree,
             file_command::file_preview,
@@ -144,9 +173,23 @@ pub fn run() {
             config_command::toggle_mcp_server,
             config_command::delete_mcp_server,
             // 权限规则
-            config_command::list_perm_rules,
+            config_command::list_global_perm_rules,
+            config_command::list_visible_perm_rules,
             config_command::save_perm_rule,
             config_command::delete_perm_rule,
+            // 技能
+            skill_command::list_skills,
+            skill_command::save_skill,
+            skill_command::delete_skill,
+            skill_command::search_skill_market,
+            skill_command::install_skill_from_github,
+            // 插件
+            plugin_command::list_plugins,
+            plugin_command::install_plugin,
+            plugin_command::toggle_plugin,
+            plugin_command::delete_plugin,
+            plugin_command::search_marketplace,
+            plugin_command::install_plugin_from_github,
         ])
         .run(tauri::generate_context!())
         .expect("error while running cyan application");

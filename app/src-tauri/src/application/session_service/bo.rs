@@ -4,6 +4,17 @@ use chrono::NaiveDateTime;
 
 use crate::domain::session::{Message, Session};
 
+/// 项目 token 用量 BO（按项目聚合全部会话）
+#[derive(Debug, Clone)]
+pub struct ProjectTokenUsageBO {
+    /// 累计输入 token
+    pub input_tokens: i64,
+    /// 累计输出 token
+    pub output_tokens: i64,
+    /// 会话数
+    pub session_count: i64,
+}
+
 /// 会话摘要 BO（列表项）
 #[derive(Debug, Clone)]
 pub struct SessionSummaryBO {

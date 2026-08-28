@@ -3,8 +3,10 @@
 pub mod agent;
 pub mod config;
 pub mod error;
+pub mod plugin;
 pub mod project;
 pub mod session;
 pub mod shared;
+pub mod skill;
 
 pub use error::DomainError;

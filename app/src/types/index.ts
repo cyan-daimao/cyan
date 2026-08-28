@@ -31,6 +31,16 @@ export type PermAction = 'allow' | 'ask' | 'deny';
 /** 项目脚手架模板（domain project.rs：empty / rust / node） */
 export type ProjectTemplate = 'empty' | 'rust' | 'node';
 
+/** 项目级 token 用量 DTO（ProjectTokenUsageDTO） */
+export interface ProjectTokenUsageDTO {
+  /** 累计输入 token */
+  inputTokens: number;
+  /** 累计输出 token */
+  outputTokens: number;
+  /** 会话数 */
+  sessionCount: number;
+}
+
 /** 会话摘要 DTO */
 export interface SessionSummaryDTO {
   id: number;
@@ -167,9 +177,18 @@ export interface McpServerDTO {
   lastError?: string;
 }
 
+/** 权限规则作用域 */
+export type RuleScope = 'global' | 'project' | 'session';
+
 /** 权限规则 DTO */
 export interface PermRuleDTO {
   id: number;
+  /** 作用域：global 全局 / project 本项目 / session 本会话 */
+  scope: RuleScope;
+  /** 所属项目 id（非项目级为 null） */
+  projectId: number | null;
+  /** 所属会话 id（非会话级为 null） */
+  sessionId: number | null;
   tool: string;
   pattern: string;
   action: PermAction;
@@ -238,3 +257,77 @@ export type AgentEvent =
       message?: string;
       usage: Tokens;
     };
+
+/* ============================================================
+ * 技能（Skill）v1 — PLUGIN_DESIGN 第 2 节
+ * ============================================================ */
+
+/** 技能作用域：全局 ~/.cyan/skills / 项目 <项目根>/.cyan/skills / 插件携带 */
+export type SkillScope = 'global' | 'project';
+
+/** 技能来源（plugin 来源的技能由插件携带，只读） */
+export type SkillSource = SkillScope | 'plugin';
+
+/** 技能 DTO（文件名即技能 id） */
+export interface SkillDTO {
+  /** 文件名（kebab-case，不含扩展名） */
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  source: SkillSource;
+  /** 插件来源时的插件名（其他来源为 null） */
+  pluginName: string | null;
+  /** 技能市场来源仓库（owner/repo；手动创建/插件携带为 null） */
+  marketRepo: string | null;
+  /** 正文 prompt 模板，支持 $ARGUMENTS 占位符 */
+  content: string;
+}
+
+/** 保存技能请求：scope=project 时必须携带 projectPath */
+export interface SaveSkillRequest {
+  scope: SkillScope;
+  fileName: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  content: string;
+  projectPath?: string;
+}
+
+/* ============================================================
+ * 插件（Plugin）v1 — PLUGIN_DESIGN 第 3 节（声明式能力包）
+ * ============================================================ */
+
+/** 插件状态 */
+export type PluginStatus = 'enabled' | 'disabled';
+
+/** 插件 DTO */
+export interface PluginDTO {
+  id: number;
+  name: string;
+  version: string;
+  author: string;
+  description: string;
+  status: PluginStatus;
+  /** 内容物计数：技能 / MCP 服务器 / 权限规则 */
+  skillCount: number;
+  mcpCount: number;
+  ruleCount: number;
+  /** 安装时间（YYYY-MM-DD HH:MM:SS） */
+  installedAt: string;
+}
+
+/* ============================================================
+ * 插件市场（PLUGIN_DESIGN 3.2 市场 = git 仓库协议的 GitHub 搜索形态）
+ * ============================================================ */
+
+/** 插件市场条目 DTO（GitHub 仓库搜索结果） */
+export interface MarketItemDTO {
+  /** owner/repo */
+  fullName: string;
+  description: string | null;
+  stars: number;
+  author: string;
+  url: string;
+}

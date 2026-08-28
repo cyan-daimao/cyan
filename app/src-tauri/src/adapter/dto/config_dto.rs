@@ -192,12 +192,28 @@ impl From<McpServerBO> for McpServerDTO {
     }
 }
 
+/// list_visible_perm_rules 请求（会话可见：全局 + 项目 + 会话）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListVisibleRulesRequest {
+    /// 会话 id
+    pub session_id: i64,
+    /// 项目 id
+    pub project_id: i64,
+}
+
 /// save_perm_rule 请求
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SavePermRuleRequest {
     /// 规则 id（编辑时携带）
     pub id: Option<i64>,
+    /// 作用域（global/project/session，新建时必填）
+    pub scope: Option<String>,
+    /// 项目 id（scope 为 project/session 时必填）
+    pub project_id: Option<i64>,
+    /// 会话 id（scope 为 session 时必填）
+    pub session_id: Option<i64>,
     /// 工具名
     pub tool: String,
     /// glob 匹配模式
@@ -212,6 +228,9 @@ impl From<SavePermRuleRequest> for SavePermRuleCmd {
     fn from(r: SavePermRuleRequest) -> Self {
         Self {
             id: r.id,
+            scope: r.scope.unwrap_or_default(),
+            project_id: r.project_id,
+            session_id: r.session_id,
             tool: r.tool,
             pattern: r.pattern,
             action: r.action,
@@ -240,6 +259,12 @@ impl From<DeletePermRuleRequest> for DeletePermRuleCmd {
 pub struct PermRuleDTO {
     /// 规则 id
     pub id: i64,
+    /// 作用域（global/project/session）
+    pub scope: String,
+    /// 所属项目 id（null = 非项目级）
+    pub project_id: Option<i64>,
+    /// 所属会话 id（null = 非会话级）
+    pub session_id: Option<i64>,
     /// 工具名
     pub tool: String,
     /// glob 匹配模式
@@ -254,6 +279,9 @@ impl From<PermRuleBO> for PermRuleDTO {
     fn from(bo: PermRuleBO) -> Self {
         Self {
             id: bo.id,
+            scope: bo.scope,
+            project_id: bo.project_id,
+            session_id: bo.session_id,
             tool: bo.tool,
             pattern: bo.pattern,
             action: bo.action,

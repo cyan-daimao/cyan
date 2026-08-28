@@ -1,3 +1,5 @@
+import { FolderOpenOutlined, ProfileOutlined } from '@ant-design/icons';
+
 interface TopbarProps {
   /** <1100px 时隐藏文件目录开关 */
   showFiles: boolean;
@@ -6,7 +8,7 @@ interface TopbarProps {
   onOpenDrawer: () => void;
 }
 
-/** 极简顶栏：文件目录开关 🗂 + 任务与变更开关 📋 */
+/** 极简顶栏：文件目录开关 + 任务与变更开关 */
 export function Topbar({ showFiles, filesActive, onToggleFiles, onOpenDrawer }: TopbarProps) {
   return (
     <header className="topbar">
@@ -17,11 +19,11 @@ export function Topbar({ showFiles, filesActive, onToggleFiles, onOpenDrawer }: 
           title="文件目录"
           onClick={onToggleFiles}
         >
-          🗂
+          <FolderOpenOutlined />
         </button>
       ) : null}
       <button className="icon-btn" title="任务与变更" onClick={onOpenDrawer}>
-        📋
+        <ProfileOutlined />
       </button>
     </header>
   );

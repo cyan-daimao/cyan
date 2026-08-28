@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Drawer, Modal } from 'antd';
+import { CheckOutlined, FileTextOutlined } from '@ant-design/icons';
 import type { ChangeView } from '../../types';
 import { useAgentStore } from '../../stores/agentStore';
 import { confirmDanger } from '../../utils/feedback';
@@ -36,7 +37,7 @@ export function TaskDrawer({ open, onClose }: TaskDrawerProps) {
   return (
     <>
       <Drawer title="任务与变更" placement="right" width={400} open={open} onClose={onClose}>
-        <div className="section-title">✅ 当前任务（TODO）</div>
+        <div className="section-title">当前任务（TODO）</div>
         {todos.length === 0 ? (
           <div className="drawer-empty">暂无进行中的任务</div>
         ) : (
@@ -45,18 +46,18 @@ export function TaskDrawer({ open, onClose }: TaskDrawerProps) {
               key={t.id}
               className={`todo-item${t.status === 'done' ? ' done' : t.status === 'in_progress' ? ' doing' : ''}`}
             >
-              <span className="todo-check">{t.status === 'done' ? '✓' : ''}</span>
+              <span className="todo-check">{t.status === 'done' ? <CheckOutlined /> : null}</span>
               <span className="todo-text">{t.content}</span>
             </div>
           ))
         )}
-        <div className="section-title">📝 文件变更（Checkpoints）</div>
+        <div className="section-title">文件变更（Checkpoints）</div>
         {changes.length === 0 ? (
           <div className="drawer-empty">本次会话还没有文件改动</div>
         ) : (
           changes.map((c) => (
             <div className="change-item" key={c.changeId}>
-              <span>📄</span>
+              <FileTextOutlined style={{ color: 'var(--text-3)' }} />
               <span className="f-path mono" title={c.filePath}>
                 {c.filePath}
               </span>

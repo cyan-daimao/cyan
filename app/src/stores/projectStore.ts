@@ -19,6 +19,8 @@ interface ProjectState {
   open: (path: string) => Promise<boolean>;
   /** 新建项目（脚手架 + git init）并切换 */
   create: (name: string, parent: string, template: ProjectTemplate, gitInit: boolean) => Promise<ProjectDTO | null>;
+  /** 从列表移除项目（软删记录，不删磁盘；移除当前项目则切换到下一个） */
+  remove: (path: string) => Promise<boolean>;
 }
 
 /** 切换项目后的全量联动（PRD 5.3 / 验收 6） */
@@ -87,6 +89,29 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     } catch (e) {
       toast.error(errText(e));
       return null;
+    }
+  },
+
+  remove: async (path) => {
+    try {
+      await projectApi.removeProject(path);
+      const remaining = get().recents.filter((p) => p.path !== path);
+      const wasCurrent = get().current?.path === path;
+      set({ recents: remaining });
+      if (wasCurrent) {
+        // 移除当前项目：切到下一个最近项目，没有则回空状态
+        const next = remaining[0] ?? null;
+        set({ current: next });
+        const ss = useSessionStore.getState();
+        ss.resetForProject();
+        useAgentStore.getState().resetForSession();
+        if (next) await ss.loadSessions(next.path);
+      }
+      toast.success('已移除项目（磁盘文件未删除）');
+      return true;
+    } catch (e) {
+      toast.error(`移除项目失败：${errText(e)}`);
+      return false;
     }
   },
 }));

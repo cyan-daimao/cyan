@@ -19,3 +19,10 @@ pub struct CreateProjectCmd {
     /// 是否初始化 git 仓库
     pub git_init: bool,
 }
+
+/// 移除项目命令（软删，不碰磁盘）
+#[derive(Debug, Clone)]
+pub struct RemoveProjectCmd {
+    /// 项目目录路径
+    pub path: String,
+}

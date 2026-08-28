@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Alert, Button, Checkbox, Form, Input, Modal, Select, Tabs, Tag } from 'antd';
+import { FolderOpenOutlined } from '@ant-design/icons';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import type { ProjectTemplate } from '../../types';
 import { useProjectStore } from '../../stores/projectStore';
-import { guardBusy } from '../../utils/guard';
 import { toast } from '../../utils/feedback';
 
 /** 脚手架模板（与后端 domain project.rs 一致：empty / rust / node） */
@@ -25,14 +26,12 @@ export function ProjectModal({ open, onClose }: ProjectModalProps) {
   const createProject = useProjectStore((s) => s.create);
 
   const [tab, setTab] = useState<'open' | 'create'>('open');
-  const [path, setPath] = useState('');
-  const [pathErr, setPathErr] = useState('');
   const [opening, setOpening] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form] = Form.useForm<{ name: string; parent: string; template: ProjectTemplate; gitInit: boolean }>();
 
   const doOpen = async (p: string) => {
-    if (guardBusy('切换项目')) return;
+    // 多项目并发：切换项目不阻塞后台运行中的会话
     if (p === current?.path) {
       onClose();
       return;
@@ -43,22 +42,19 @@ export function ProjectModal({ open, onClose }: ProjectModalProps) {
     if (ok) onClose();
   };
 
-  const onOpenPath = () => {
-    const raw = path.trim();
-    if (!raw) {
-      setPathErr('请输入文件夹路径');
-      return;
-    }
-    if (!/^[~\/]/.test(raw)) {
-      setPathErr('路径需以 ~ 或 / 开头');
-      return;
-    }
-    setPathErr('');
-    void doOpen(raw);
+  /** 弹出系统文件夹选择器，选中后直接打开 */
+  const pickAndOpen = async () => {
+    const picked = await openDialog({ directory: true, multiple: false, title: '选择项目文件夹' });
+    if (typeof picked === 'string') void doOpen(picked);
+  };
+
+  /** 为「新建项目」的所在目录选择文件夹，回填到表单 */
+  const pickParent = async () => {
+    const picked = await openDialog({ directory: true, multiple: false, title: '选择所在目录' });
+    if (typeof picked === 'string') form.setFieldValue('parent', picked);
   };
 
   const onCreate = async () => {
-    if (guardBusy('切换项目')) return;
     let values: { name: string; parent: string; template: ProjectTemplate; gitInit: boolean };
     try {
       values = await form.validateFields();
@@ -98,24 +94,16 @@ export function ProjectModal({ open, onClose }: ProjectModalProps) {
                   style={{ marginBottom: 12 }}
                   message="项目即工作目录：Agent 的文件读写、Shell 命令、会话归档都限定在项目目录内，防止越权操作其他文件。"
                 />
-                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1 }}>
-                    <Input
-                      className="mono"
-                      placeholder="输入文件夹路径，如 ~/Documents/workspace/my-app"
-                      value={path}
-                      status={pathErr ? 'error' : ''}
-                      onChange={(e) => setPath(e.target.value)}
-                      onPressEnter={onOpenPath}
-                    />
-                    <div style={{ color: 'var(--error)', fontSize: 12, minHeight: 18, marginTop: 4 }}>
-                      {pathErr}
-                    </div>
-                  </div>
-                  <Button type="primary" loading={opening} onClick={onOpenPath}>
-                    打开
-                  </Button>
-                </div>
+                <Button
+                  type="primary"
+                  icon={<FolderOpenOutlined />}
+                  loading={opening}
+                  block
+                  size="large"
+                  onClick={() => void pickAndOpen()}
+                >
+                  选择文件夹打开…
+                </Button>
                 <div className="section-title">最近项目</div>
                 {recents.length === 0 ? (
                   <div className="drawer-empty">暂无最近项目</div>
@@ -126,7 +114,9 @@ export function ProjectModal({ open, onClose }: ProjectModalProps) {
                       className={`recent-item${p.path === current?.path ? ' current' : ''}`}
                       onClick={() => void doOpen(p.path)}
                     >
-                      <span className="r-icon">📁</span>
+                      <span className="r-icon">
+                        <FolderOpenOutlined />
+                      </span>
                       <div className="r-main">
                         <div className="r-name">
                           {p.name} {p.path === current?.path ? <Tag color="processing">当前</Tag> : null}
@@ -166,11 +156,20 @@ export function ProjectModal({ open, onClose }: ProjectModalProps) {
                   name="parent"
                   label="所在目录"
                   rules={[
-                    { required: true, message: '请输入所在目录' },
+                    { required: true, message: '请选择所在目录' },
                     { pattern: /^[~\/]/, message: '目录需以 ~ 或 / 开头' },
                   ]}
                 >
-                  <Input className="mono" />
+                  <Input
+                    className="mono"
+                    readOnly
+                    placeholder="点击右侧按钮选择文件夹"
+                    suffix={
+                      <Button size="small" icon={<FolderOpenOutlined />} onClick={() => void pickParent()}>
+                        浏览…
+                      </Button>
+                    }
+                  />
                 </Form.Item>
                 <Form.Item name="template" label="脚手架模板" rules={[{ required: true }]}>
                   <Select

@@ -8,7 +8,6 @@ use crate::domain::shared::ProjectPath;
 
 /// 写类工具清单（默认 Ask，plan 模式一律 Deny）
 pub const WRITE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "Bash"];
-
 /// 是否写类工具（MCP 注入工具 `mcp__*` 一律按写类对待，默认 Ask）
 pub fn is_write_tool(tool: &str) -> bool {
     WRITE_TOOLS.contains(&tool) || tool.starts_with("mcp__")

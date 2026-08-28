@@ -1,18 +1,28 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { Spin, Tag } from 'antd';
+import {
+  CodeOutlined,
+  EditOutlined,
+  FileTextOutlined,
+  GlobalOutlined,
+  SearchOutlined,
+  ToolOutlined,
+} from '@ant-design/icons';
 import type { ToolStatus } from '../../types';
 import { DiffView } from './DiffView';
 
-/** 工具图标与底色按工具类型区分 */
-const TOOL_META: Record<string, { icon: string; cls: string }> = {
-  Read: { icon: '📄', cls: 'read' },
-  Grep: { icon: '🔍', cls: 'grep' },
-  Glob: { icon: '📂', cls: 'grep' },
-  Bash: { icon: '💻', cls: 'bash' },
-  Edit: { icon: '✏️', cls: 'edit' },
-  Write: { icon: '📝', cls: 'edit' },
-  FetchURL: { icon: '🌐', cls: 'read' },
-  WebSearch: { icon: '🔎', cls: 'grep' },
+/** 工具图标与底色按工具类型区分（antd icons） */
+const TOOL_META: Record<string, { icon: ReactNode; cls: string }> = {
+  Read: { icon: <FileTextOutlined />, cls: 'read' },
+  Grep: { icon: <SearchOutlined />, cls: 'grep' },
+  Glob: { icon: <SearchOutlined />, cls: 'grep' },
+  Bash: { icon: <CodeOutlined />, cls: 'bash' },
+  Edit: { icon: <EditOutlined />, cls: 'edit' },
+  MultiEdit: { icon: <EditOutlined />, cls: 'edit' },
+  Write: { icon: <EditOutlined />, cls: 'edit' },
+  TodoWrite: { icon: <ToolOutlined />, cls: 'read' },
+  WebFetch: { icon: <GlobalOutlined />, cls: 'read' },
 };
 
 function StatusTag({ status }: { status: ToolStatus }) {
@@ -44,7 +54,7 @@ interface ToolCardProps {
 /** 工具调用卡片：头部可点击展开/收起输出 */
 export function ToolCard({ tool, arg, status, outputType, output, note }: ToolCardProps) {
   const [open, setOpen] = useState(false);
-  const meta = TOOL_META[tool] ?? { icon: '🔧', cls: 'read' };
+  const meta = TOOL_META[tool] ?? { icon: <ToolOutlined />, cls: 'read' };
   return (
     <div className={`tool-card${open ? ' open' : ''}`}>
       <div className="tool-head" onClick={() => setOpen((v) => !v)}>

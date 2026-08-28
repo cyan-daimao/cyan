@@ -74,6 +74,12 @@ impl From<McpServer> for McpServerBO {
 pub struct PermRuleBO {
     /// 规则 id
     pub id: i64,
+    /// 作用域（global/project/session）
+    pub scope: String,
+    /// 所属项目 id（None = 非项目级）
+    pub project_id: Option<i64>,
+    /// 所属会话 id（None = 非会话级）
+    pub session_id: Option<i64>,
     /// 工具名
     pub tool: String,
     /// glob 匹配模式
@@ -88,6 +94,9 @@ impl From<PermissionRule> for PermRuleBO {
     fn from(r: PermissionRule) -> Self {
         Self {
             id: r.id,
+            scope: r.scope().as_str().to_string(),
+            project_id: r.project_id,
+            session_id: r.session_id,
             tool: r.tool,
             pattern: r.pattern,
             action: r.action.as_str().to_string(),

@@ -6,9 +6,9 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::adapter::dto::{
-    DeleteMcpRequest, DeleteModelRequest, DeletePermRuleRequest, McpServerDTO, ModelDTO,
-    PermRuleDTO, SaveMcpRequest, SaveModelRequest, SavePermRuleRequest, SetDefaultModelRequest,
-    ToggleMcpRequest,
+    DeleteMcpRequest, DeleteModelRequest, DeletePermRuleRequest, ListVisibleRulesRequest,
+    McpServerDTO, ModelDTO, PermRuleDTO, SaveMcpRequest, SaveModelRequest, SavePermRuleRequest,
+    SetDefaultModelRequest, ToggleMcpRequest,
 };
 use crate::application::config_service::ConfigService;
 use crate::error::ServiceError;
@@ -113,12 +113,24 @@ pub async fn delete_mcp_server(
     Ok(())
 }
 
-/// 权限规则列表（sort 升序）
+/// 全局权限规则列表（设置页）
 #[tauri::command]
-pub async fn list_perm_rules(
+pub async fn list_global_perm_rules(
     svc: State<'_, Arc<dyn ConfigService>>,
 ) -> Result<Vec<PermRuleDTO>, ServiceError> {
-    let bos = svc.list_perm_rules().await?;
+    let bos = svc.list_global_rules().await?;
+    Ok(bos.into_iter().map(PermRuleDTO::from).collect())
+}
+
+/// 会话可见权限规则列表（全局 + 项目 + 会话，sort 升序）
+#[tauri::command]
+pub async fn list_visible_perm_rules(
+    svc: State<'_, Arc<dyn ConfigService>>,
+    request: ListVisibleRulesRequest,
+) -> Result<Vec<PermRuleDTO>, ServiceError> {
+    let bos = svc
+        .list_visible_rules(request.session_id, request.project_id)
+        .await?;
     Ok(bos.into_iter().map(PermRuleDTO::from).collect())
 }
 

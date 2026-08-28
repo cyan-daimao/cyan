@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Button, Input, Table, Tag } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { ModelDTO } from '../../types';
 import { useConfigStore } from '../../stores/configStore';
@@ -124,12 +125,13 @@ export function ModelsTab() {
         />
         <Button
           type="primary"
+          icon={<PlusOutlined />}
           onClick={() => {
             setEditing(null);
             setFormOpen(true);
           }}
         >
-          ＋ 新增模型
+          新增模型
         </Button>
       </div>
       <Table<ModelDTO>

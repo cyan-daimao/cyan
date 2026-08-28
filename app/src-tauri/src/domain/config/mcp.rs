@@ -54,6 +54,8 @@ pub struct McpServer {
     pub tools: i64,
     /// 最近失败原因
     pub last_error: Option<String>,
+    /// 来源插件名（None = 用户自建）
+    pub plugin_origin: Option<String>,
     /// 创建时间
     pub created_at: NaiveDateTime,
     /// 更新时间
@@ -70,6 +72,7 @@ impl McpServer {
             status: McpStatus::Disabled,
             tools: 0,
             last_error: None,
+            plugin_origin: None,
             created_at: now,
             updated_at: now,
         }

@@ -1,11 +1,23 @@
 import type { KeyboardEvent, RefObject } from 'react';
-import { Segmented, Select } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { Segmented, Select, Tag } from 'antd';
+import {
+  ArrowUpOutlined,
+  PlusOutlined,
+  ReadOutlined,
+  SafetyOutlined,
+  StopOutlined,
+} from '@ant-design/icons';
 import { useAgentStore } from '../../../stores/agentStore';
 import { useConfigStore } from '../../../stores/configStore';
+import { useSessionStore } from '../../../stores/sessionStore';
+import { useSkillStore } from '../../../stores/skillStore';
+import { useProjectStore } from '../../../stores/projectStore';
 import { guardBusy, isBusy } from '../../../utils/guard';
 import { toast } from '../../../utils/feedback';
 import { fmtTokens } from '../../../utils/format';
-import type { PermMode } from '../../../types';
+import { PermRulesModal } from '../../../components/perms/PermRulesModal';
+import type { PermMode, SkillDTO } from '../../../types';
 
 interface InputAreaProps {
   draft: string;
@@ -13,7 +25,7 @@ interface InputAreaProps {
   inputRef: RefObject<HTMLTextAreaElement>;
 }
 
-/** 输入区：权限模式胶囊 + 上下文占用条 + 圆角大输入卡 */
+/** 输入区：权限模式胶囊 + 上下文占用条 + 圆角大输入卡 + `/` 技能补全 */
 export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
   const runState = useAgentStore((s) => s.runState);
   const ctxPercent = useAgentStore((s) => s.ctxPercent);
@@ -28,13 +40,81 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
 
   const running = runState === 'running' || runState === 'waiting_approval';
   const enabledModels = models.filter((m) => m.status === 'enabled');
+  const activeId = useSessionStore((s) => s.activeId);
+  const [permsOpen, setPermsOpen] = useState(false);
+
+  /* ---- `/` 技能补全（PLUGIN_DESIGN 2.3） ---- */
+  const project = useProjectStore((s) => s.current);
+  const skills = useSkillStore((s) => s.skills);
+  const loadSkills = useSkillStore((s) => s.load);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [suggestClosed, setSuggestClosed] = useState(false);
+
+  // 项目切换时加载技能（无项目传空串，只列全局）
+  useEffect(() => {
+    void loadSkills(project?.path ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.path]);
+
+  /** 补全候选：草稿以 / 开头时，按 id/名称/描述过滤已启用技能 */
+  const matches = useMemo<SkillDTO[]>(() => {
+    if (!draft.startsWith('/')) return [];
+    const kw = draft.slice(1).toLowerCase();
+    if (kw.includes('\n')) return [];
+    return skills.filter(
+      (s) =>
+        s.enabled &&
+        (!kw ||
+          s.id.toLowerCase().includes(kw) ||
+          s.name.toLowerCase().includes(kw) ||
+          s.description.toLowerCase().includes(kw)),
+    );
+  }, [draft, skills]);
+
+  const suggestOpen = matches.length > 0 && !suggestClosed;
+
+  /** 选中技能：草稿替换为技能正文（$ARGUMENTS 原样保留），聚焦输入框 */
+  const pickSkill = (s: SkillDTO) => {
+    onDraftChange(s.content);
+    setSuggestClosed(true);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const onDraftChangeWrap = (v: string) => {
+    onDraftChange(v);
+    setSuggestClosed(false);
+    setActiveIdx(0);
+  };
 
   const onSend = async () => {
     const accepted = await send(draft);
-    if (accepted) onDraftChange('');
+    if (accepted) onDraftChangeWrap('');
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 技能补全打开时：上下键移动、Enter 选中、Esc 关闭（不触发发送/中断）
+    if (suggestOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveIdx((i) => (i + 1) % matches.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveIdx((i) => (i - 1 + matches.length) % matches.length);
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        pickSkill(matches[activeIdx] ?? matches[0]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSuggestClosed(true);
+        return;
+      }
+    }
     // Enter 发送、Shift+Enter 换行、Esc 中断
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -58,7 +138,7 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
     <div className="input-area">
       {permMode === 'plan' ? (
         <div className="plan-banner">
-          🗒️ 计划模式：Agent 只会读代码并给出方案，不会修改文件或执行命令。
+          <ReadOutlined /> 计划模式：Agent 只会读代码并给出方案，不会修改文件或执行命令。
         </div>
       ) : null}
       <div className="input-box">
@@ -72,6 +152,19 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
               { label: '自动', value: 'auto' },
             ]}
           />
+          <button
+            className="icon-btn"
+            title="当前会话的权限规则"
+            onClick={() => {
+              if (activeId === null) {
+                toast.warning('请先开始一个对话');
+                return;
+              }
+              setPermsOpen(true);
+            }}
+          >
+            <SafetyOutlined /> 规则
+          </button>
           <div style={{ flex: 1 }} />
           <div className="ctx-meter" title="上下文窗口占用">
             <span className="ctx-label">上下文</span>
@@ -82,12 +175,40 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
           </div>
         </div>
         <div className="input-frame">
+          {suggestOpen ? (
+            <div className="skill-suggest">
+              {matches.map((s, i) => (
+                <div
+                  key={`${s.source}:${s.id}`}
+                  className={`skill-suggest-item${i === activeIdx ? ' active' : ''}`}
+                  // mousedown 抢先于 blur，保持输入框焦点
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pickSkill(s);
+                  }}
+                  onMouseEnter={() => setActiveIdx(i)}
+                >
+                  <span className="ss-name mono">/{s.id}</span>
+                  <span className="ss-label">{s.name}</span>
+                  <Tag
+                    className="ss-tag"
+                    color={s.source === 'project' ? 'processing' : s.source === 'plugin' ? 'purple' : undefined}
+                  >
+                    {s.source === 'project' ? '项目' : s.source === 'plugin' ? '插件' : '全局'}
+                  </Tag>
+                  <span className="ss-desc" title={s.description}>
+                    {s.description}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <textarea
             ref={inputRef}
             rows={2}
             placeholder="描述你要完成的任务，例如：帮我修复登录页的超时 bug…"
             value={draft}
-            onChange={(e) => onDraftChange(e.target.value)}
+            onChange={(e) => onDraftChangeWrap(e.target.value)}
             onKeyDown={onKeyDown}
           />
           <div className="input-toolbar">
@@ -96,9 +217,9 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
               title="添加附件"
               onClick={() => toast.info('附件上传：当前版本暂未实现')}
             >
-              ＋
+              <PlusOutlined />
             </button>
-            <span className="input-hint">Enter 发送 · Shift+Enter 换行 · Esc 中断</span>
+            <span className="input-hint">Enter 发送 · Shift+Enter 换行 · Esc 中断 · / 技能</span>
             <div style={{ flex: 1 }} />
             {tokens.input > 0 || tokens.output > 0 ? (
               <span className="token-line">
@@ -130,11 +251,12 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
                 else void onSend();
               }}
             >
-              {running ? '■' : '➤'}
+              {running ? <StopOutlined /> : <ArrowUpOutlined />}
             </button>
           </div>
         </div>
       </div>
+      <PermRulesModal open={permsOpen} onClose={() => setPermsOpen(false)} />
     </div>
   );
 }

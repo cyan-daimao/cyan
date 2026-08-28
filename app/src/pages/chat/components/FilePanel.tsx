@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Modal, Spin } from 'antd';
+import { CloseOutlined, FolderOpenOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { FileNodeDTO } from '../../../types';
 import { filePreview, fileTree } from '../../../services/file';
 import { errText, toast } from '../../../utils/feedback';
@@ -59,16 +60,18 @@ export function FilePanel({ projectPath, projectName, onClose, onReference }: Fi
   return (
     <aside className="file-panel">
       <div className="fp-header">
-        <span className="fp-title">📂 文件</span>
+        <span className="fp-title">
+          <FolderOpenOutlined /> 文件
+        </span>
         <span className="fp-root mono" title={projectPath ?? ''}>
           {projectName ?? '未打开'}
         </span>
         <div style={{ flex: 1 }} />
         <button className="icon-btn" title="刷新" disabled={loading} onClick={() => void refresh()}>
-          {loading ? <Spin size="small" /> : '⟳'}
+          {loading ? <Spin size="small" /> : <ReloadOutlined />}
         </button>
         <button className="icon-btn" title="收起" onClick={onClose}>
-          ✕
+          <CloseOutlined />
         </button>
       </div>
       <div className="fp-tree">

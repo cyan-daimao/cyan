@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { RightOutlined } from '@ant-design/icons';
 import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { EmptyState } from './components/EmptyState';
@@ -10,12 +11,13 @@ import { TaskDrawer } from '../../components/drawer/TaskDrawer';
 import { ProjectModal } from '../../components/project/ProjectModal';
 import { SettingsModal } from '../../components/settings/SettingsModal';
 import type { SettingsTabKey } from '../../components/settings/SettingsModal';
+import { CapabilitiesModal } from '../../components/capabilities/CapabilitiesModal';
 import { useWindowWidth } from './hooks/useResponsive';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useAgentStore } from '../../stores/agentStore';
 import { useProjectStore } from '../../stores/projectStore';
 import { useConfigStore } from '../../stores/configStore';
-import { guardBusy, isBusy } from '../../utils/guard';
+import { isBusy } from '../../utils/guard';
 import { confirmDanger, toast } from '../../utils/feedback';
 
 /** 会话主视图：三栏布局（侧栏 / 会话区 / 文件面板）+ 抽屉与弹窗编排 */
@@ -27,6 +29,7 @@ export default function ChatPage() {
   const [filePanelOpen, setFilePanelOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [settings, setSettings] = useState<{ open: boolean; tab: SettingsTabKey }>({
     open: false,
     tab: 'models',
@@ -83,7 +86,7 @@ export default function ChatPage() {
   /* ---- 侧栏动作 ---- */
 
   const onOpenProject = useCallback(() => {
-    if (guardBusy('切换项目')) return;
+    // 多项目并发：切换项目不阻塞后台运行中的会话
     setProjectOpen(true);
   }, []);
 
@@ -93,8 +96,9 @@ export default function ChatPage() {
 
   const onSelectSession = useCallback(
     (id: number) => {
-      if (guardBusy('切换会话')) return;
+      // 多会话并发：允许随时切换，运行中的会话在后台继续
       if (id === useSessionStore.getState().activeId) return;
+      useAgentStore.getState().clearSessionFlag(id);
       void useSessionStore
         .getState()
         .openSession(id)
@@ -110,7 +114,11 @@ export default function ChatPage() {
   );
 
   const onDeleteSession = useCallback((id: number) => {
-    if (guardBusy('删除会话')) return;
+    const flag = useAgentStore.getState().sessionRuns[id];
+    if (flag === 'running' || flag === 'waiting_approval') {
+      toast.warning('该会话任务运行中，请先停止再删除');
+      return;
+    }
     const title = useSessionStore.getState().sessions.find((s) => s.id === id)?.title ?? '';
     confirmDanger({
       title: '删除会话',
@@ -153,7 +161,7 @@ export default function ChatPage() {
     <div className="app-shell">
       {sidebarCollapsed ? (
         <button className="fab-expand" title="展开侧边栏" onClick={() => setSidebarCollapsed(false)}>
-          ›
+          <RightOutlined />
         </button>
       ) : null}
       <Sidebar
@@ -161,6 +169,7 @@ export default function ChatPage() {
         onToggle={() => setSidebarCollapsed((v) => !v)}
         onOpenProject={onOpenProject}
         onOpenSettings={onOpenSettings}
+        onOpenSkills={() => setSkillsOpen(true)}
         onSelectSession={onSelectSession}
         onDeleteSession={onDeleteSession}
       />
@@ -199,6 +208,7 @@ export default function ChatPage() {
 
       <TaskDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
       <ProjectModal open={projectOpen} onClose={() => setProjectOpen(false)} />
+      <CapabilitiesModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
       <SettingsModal
         open={settings.open}
         tab={settings.tab}

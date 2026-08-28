@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::application::session_service::{
-    CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery, MessageBO, SessionBO,
-    SessionSummaryBO,
+    CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery, MessageBO,
+    ProjectTokenUsageBO, ProjectTokenUsageQuery, SessionBO, SessionSummaryBO,
 };
 use crate::infra::db::fmt_time;
 
@@ -83,6 +83,44 @@ pub struct TokenStatDTO {
     pub input: i64,
     /// 累计输出 token
     pub output: i64,
+}
+
+/// project_token_usage 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTokenUsageRequest {
+    /// 项目路径
+    pub project_path: String,
+}
+
+impl From<ProjectTokenUsageRequest> for ProjectTokenUsageQuery {
+    fn from(r: ProjectTokenUsageRequest) -> Self {
+        Self {
+            project_path: r.project_path,
+        }
+    }
+}
+
+/// 项目 token 用量 DTO
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTokenUsageDTO {
+    /// 累计输入 token
+    pub input_tokens: i64,
+    /// 累计输出 token
+    pub output_tokens: i64,
+    /// 会话数
+    pub session_count: i64,
+}
+
+impl From<ProjectTokenUsageBO> for ProjectTokenUsageDTO {
+    fn from(bo: ProjectTokenUsageBO) -> Self {
+        Self {
+            input_tokens: bo.input_tokens,
+            output_tokens: bo.output_tokens,
+            session_count: bo.session_count,
+        }
+    }
 }
 
 /// 会话摘要 DTO（列表项）

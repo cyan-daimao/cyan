@@ -35,8 +35,11 @@ function clearDeltaBuffer() {
 }
 
 /** 后端持久化的审批 decision 字符串 → 前端审批卡状态 */
-function decisionToState(d: unknown): Exclude<ApprovalState, 'pending'> {
+function decisionToState(d: unknown): ApprovalState {
   switch (d) {
+    case 'pending':
+      // 等待决断中的审批（切换会话后从 DB 还原）
+      return 'pending';
     case 'once':
       return 'allowed';
     case 'always':
@@ -94,7 +97,7 @@ function dtoToNode(m: MessageDTO): ChatNode | null {
         callId: String(p.callId ?? ''),
         tool: String(p.tool ?? ''),
         arg: String(p.arg ?? ''),
-        reason: '',
+        reason: String(p.reason ?? ''),
         state: decisionToState(p.decision),
       };
     default:

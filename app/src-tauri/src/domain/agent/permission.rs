@@ -176,10 +176,13 @@ mod tests {
     fn rule(tool: &str, pattern: &str, action: PermAction, sort: i64) -> PermissionRule {
         PermissionRule {
             id: 0,
+            project_id: None,
+            session_id: None,
             tool: tool.into(),
             pattern: pattern.into(),
             action,
             sort,
+            plugin_origin: None,
             created_at: NaiveDateTime::default(),
             updated_at: NaiveDateTime::default(),
         }
@@ -227,9 +230,12 @@ mod tests {
         let engine = PermissionEngine::new(vec![], PermMode::Ask);
         assert_eq!(engine.decide("Edit", "src/a.rs").action, PermAction::Ask);
         assert_eq!(engine.decide("Write", "src/a.rs").action, PermAction::Ask);
+        assert_eq!(engine.decide("MultiEdit", "src/a.rs").action, PermAction::Ask);
         assert_eq!(engine.decide("Bash", "ls").action, PermAction::Ask);
         assert_eq!(engine.decide("Read", "src/a.rs").action, PermAction::Allow);
+        assert_eq!(engine.decide("Grep", "pattern").action, PermAction::Allow);
         assert_eq!(engine.decide("Glob", "src/**").action, PermAction::Allow);
+        assert_eq!(engine.decide("WebFetch", "https://x.dev").action, PermAction::Allow);
     }
 
     #[test]

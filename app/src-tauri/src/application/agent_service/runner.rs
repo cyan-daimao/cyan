@@ -73,7 +73,7 @@ fn builtin_tools() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "Edit".into(),
-            description: "对项目内文件做唯一字符串替换".into(),
+            description: "对项目内文件做唯一字符串替换（old_string 须唯一匹配）".into(),
             parameters: obj(
                 json!({
                     "path": {"type": "string"},
@@ -81,6 +81,60 @@ fn builtin_tools() -> Vec<ToolSpec> {
                     "new_string": {"type": "string"},
                 }),
                 &["path", "old_string", "new_string"],
+            ),
+        },
+        ToolSpec {
+            name: "MultiEdit".into(),
+            description: "对同一文件按顺序应用多处字符串替换，每处 old_string 须唯一匹配；任一失败则整次不写盘".into(),
+            parameters: obj(
+                json!({
+                    "path": {"type": "string"},
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": {"type": "string"},
+                                "new_string": {"type": "string"},
+                            },
+                            "required": ["old_string", "new_string"],
+                        },
+                    },
+                }),
+                &["path", "edits"],
+            ),
+        },
+        ToolSpec {
+            name: "Grep".into(),
+            description: "在项目内按正则搜索文本行，输出 `相对路径:行号: 行内容`（上限 200 条），自动跳过二进制、>1MB 文件与 .git/node_modules/target；include 为可选 glob（如 *.rs）用于过滤文件名，path 限定子目录".into(),
+            parameters: obj(
+                json!({
+                    "pattern": {"type": "string", "description": "正则表达式"},
+                    "include": {"type": "string", "description": "可选 glob，过滤文件（作用于相对路径）"},
+                    "path": {"type": "string", "description": "可选子目录（相对项目根）"},
+                }),
+                &["pattern"],
+            ),
+        },
+        ToolSpec {
+            name: "Glob".into(),
+            description: "按 glob 模式列出项目内匹配的文件（如 src/**/*.rs），返回相对路径列表（按路径排序，上限 500 条），自动跳过 .git/node_modules/target；path 限定子目录".into(),
+            parameters: obj(
+                json!({
+                    "pattern": {"type": "string", "description": "glob 模式"},
+                    "path": {"type": "string", "description": "可选子目录（相对项目根）"},
+                }),
+                &["pattern"],
+            ),
+        },
+        ToolSpec {
+            name: "WebFetch".into(),
+            description: "抓取指定 http(s) URL 的文本内容（网络访问：会访问项目外的互联网，仅用于读取公开文档/资料；超时 30s，HTML 自动剥离标签，内容截断约 20KB）".into(),
+            parameters: obj(
+                json!({
+                    "url": {"type": "string", "description": "http(s) URL"},
+                }),
+                &["url"],
             ),
         },
         ToolSpec {
@@ -117,14 +171,21 @@ fn builtin_tools() -> Vec<ToolSpec> {
     ]
 }
 
-/// 系统提示词
+/// 系统提示词（含 AGENTS.md 项目指令注入）
 fn system_prompt(root: &ProjectPath) -> String {
-    format!(
+    let mut prompt = format!(
         "你是 cyan，一个运行在用户桌面的 AI 编程 Agent。项目根目录：{}。\n\
-         通过工具完成任务：Read 读文件、Edit/Write 改文件、Bash 执行命令、TodoWrite 维护 TODO。\n\
+         通过工具完成任务：Read/Grep/Glob 查代码、Edit/MultiEdit/Write 改文件、Bash 执行命令、TodoWrite 维护 TODO、WebFetch 读取公开网页。\n\
          所有文件路径使用相对项目根的相对路径。修改前先 Read 了解上下文。",
         root.root().display()
-    )
+    );
+    // AGENTS.md 项目指令注入（不存在则静默跳过，截断 8KB 由 infra/fs 保证）
+    if let Some(agents) = crate::infra::fs::read_agents_md(root) {
+        if !agents.trim().is_empty() {
+            prompt.push_str(&format!("\n\n项目指令（AGENTS.md，须遵守）：\n{agents}"));
+        }
+    }
+    prompt
 }
 
 /// 持久化一条消息（序号由 Session::append_message 保证自洽）
@@ -319,11 +380,16 @@ pub async fn run_loop(
     api_key: String,
     rules: Vec<PermissionRule>,
     mode: PermMode,
+    disabled_tools: Vec<String>,
 ) {
     let session_id = session.id;
     let cancel = run.token();
     let mut engine = PermissionEngine::new(rules, mode);
-    let tools = builtin_tools();
+    // 「能力」面板禁用的工具不下发给 LLM（模型看不到也就不会调用）
+    let tools: Vec<ToolSpec> = builtin_tools()
+        .into_iter()
+        .filter(|t| !disabled_tools.iter().any(|d| d == &t.name))
+        .collect();
     let mut llm_messages = vec![ChatMessage::text(ChatRole::System, system_prompt(&root))];
     llm_messages.extend(history_to_chat(&session.messages));
     let mut total_usage = TokenUsage::default();
@@ -482,6 +548,20 @@ pub async fn run_loop(
                             call_id: call.call_id.clone(),
                             decision: ApprovalDecision::Auto.as_str().to_string(),
                         });
+                        persist_message(
+                            &ctx,
+                            &mut session,
+                            MessageKind::Approval,
+                            json!({
+                                "callId": call.call_id,
+                                "tool": call.tool,
+                                "arg": call.arg,
+                                "reason": decision.reason,
+                                "decision": ApprovalDecision::Auto.as_str(),
+                            })
+                            .to_string(),
+                        )
+                        .await;
                         ApprovalDecision::Auto
                     } else {
                         ctx.sink.emit(AgentEvent::ApprovalRequired {
@@ -491,6 +571,21 @@ pub async fn run_loop(
                             arg: call.arg.clone(),
                             reason: decision.reason.clone(),
                         });
+                        // 先落库 pending 审批消息：用户切换会话再回来时，审批卡能从 DB 还原
+                        let pending_msg = persist_message(
+                            &ctx,
+                            &mut session,
+                            MessageKind::Approval,
+                            json!({
+                                "callId": call.call_id,
+                                "tool": call.tool,
+                                "arg": call.arg,
+                                "reason": decision.reason,
+                                "decision": "pending",
+                            })
+                            .to_string(),
+                        )
+                        .await;
                         let d = match run.request_approval(&call) {
                             Ok(rx) => wait_decision(rx, cancel.clone()).await,
                             Err(_) => ApprovalDecision::Abort,
@@ -500,38 +595,33 @@ pub async fn run_loop(
                             call_id: call.call_id.clone(),
                             decision: d.as_str().to_string(),
                         });
+                        // 决断后更新同一条消息的载荷（pending → 最终决断）
+                        if let Some(m) = pending_msg {
+                            let final_payload = json!({
+                                "callId": call.call_id,
+                                "tool": call.tool,
+                                "arg": call.arg,
+                                "reason": decision.reason,
+                                "decision": d.as_str(),
+                            })
+                            .to_string();
+                            if let Err(e) = ctx.message_repo.update_payload(m.id, &final_payload).await {
+                                tracing::error!(error = %e, "审批消息更新失败");
+                            }
+                        }
                         d
                     };
-                    persist_message(
-                        &ctx,
-                        &mut session,
-                        MessageKind::Approval,
-                        json!({
-                            "callId": call.call_id,
-                            "tool": call.tool,
-                            "arg": call.arg,
-                            "decision": d.as_str(),
-                        })
-                        .to_string(),
-                    )
-                    .await;
                     if d == ApprovalDecision::Abort {
                         result = RunResult::Aborted;
                         completed = true;
                         break 'outer;
                     }
                     if d == ApprovalDecision::Always {
-                        // 「总是允许」：推导规则即时生效并落库
+                        // 「总是允许」：规则落库由 AgentService::approve 按用户选择的作用域完成；
+                        // 这里只让推导规则对当前运行的后续调用即时生效
                         let mut rule = PermissionRule::always_allow_from(&call.tool, &call.arg);
-                        match ctx.perm_repo.find_by_tool_pattern(&rule.tool, &rule.pattern).await {
-                            Ok(Some(_)) => {}
-                            Ok(None) => {
-                                if let Err(e) = ctx.perm_repo.insert(&mut rule).await {
-                                    tracing::error!(error = %e, "权限规则落库失败");
-                                }
-                            }
-                            Err(e) => tracing::error!(error = %e, "权限规则查询失败"),
-                        }
+                        rule.project_id = Some(session.project_id);
+                        rule.session_id = Some(session_id);
                         engine.add_rule(rule);
                     }
                     if !d.is_allowed() {
@@ -685,4 +775,30 @@ pub async fn run_loop(
         result,
         usage: total_usage,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_prompt_injects_agents_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = ProjectPath::new(tmp.path()).unwrap();
+        // 无 AGENTS.md：不含项目指令段
+        let prompt = system_prompt(&root);
+        assert!(!prompt.contains("AGENTS.md"));
+        // 存在 AGENTS.md：拼接到末尾
+        std::fs::write(tmp.path().join("AGENTS.md"), "提交信息用中文").unwrap();
+        let prompt = system_prompt(&root);
+        assert!(prompt.contains("项目指令（AGENTS.md，须遵守）：\n提交信息用中文"));
+    }
+
+    #[test]
+    fn builtin_tools_include_new_tools() {
+        let names: Vec<String> = builtin_tools().iter().map(|t| t.name.clone()).collect();
+        for expected in ["Grep", "Glob", "WebFetch", "MultiEdit", "Read", "Edit", "Write", "Bash"] {
+            assert!(names.iter().any(|n| n == expected), "缺少工具：{expected}");
+        }
+    }
 }

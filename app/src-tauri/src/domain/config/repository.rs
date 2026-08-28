@@ -43,18 +43,30 @@ pub trait McpRepository: Send + Sync {
 /// 权限规则仓储
 #[async_trait]
 pub trait PermRuleRepository: Send + Sync {
-    /// 全量列表（sort 升序，过滤软删）
-    async fn list(&self) -> anyhow::Result<Vec<PermissionRule>>;
-    /// 按 (tool, pattern) 唯一约束查询
+    /// 全局规则列表（双 NULL，sort 升序，过滤软删）
+    async fn list_global(&self) -> anyhow::Result<Vec<PermissionRule>>;
+    /// 会话可见规则列表：全局 + 该项目 + 该会话（sort 升序，过滤软删）
+    async fn list_visible(
+        &self,
+        session_id: i64,
+        project_id: i64,
+    ) -> anyhow::Result<Vec<PermissionRule>>;
+    /// 按 (tool, pattern, project_id, session_id) 精确作用域查询
     async fn find_by_tool_pattern(
         &self,
         tool: &str,
         pattern: &str,
+        project_id: Option<i64>,
+        session_id: Option<i64>,
     ) -> anyhow::Result<Option<PermissionRule>>;
+    /// 按 id 查询（过滤软删）
+    async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<PermissionRule>>;
     /// 插入并回填自增 id
     async fn insert(&self, rule: &mut PermissionRule) -> anyhow::Result<()>;
     /// 更新
     async fn update(&self, rule: &PermissionRule) -> anyhow::Result<()>;
     /// 软删除
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
+    /// 按来源插件软删除（插件禁用/卸载时摘除规则）
+    async fn soft_delete_by_plugin_origin(&self, origin: &str) -> anyhow::Result<()>;
 }

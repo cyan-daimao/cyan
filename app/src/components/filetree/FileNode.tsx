@@ -1,16 +1,5 @@
+import { FileTextOutlined, FolderOpenOutlined, FolderOutlined } from '@ant-design/icons';
 import type { FileNodeDTO } from '../../types';
-
-/** 按扩展名分配文件图标 */
-export function fileIcon(name: string): string {
-  if (name.endsWith('.ts') || name.endsWith('.tsx')) return '🔷';
-  if (name.endsWith('.js') || name.endsWith('.jsx')) return '🟨';
-  if (name.endsWith('.json')) return '🧾';
-  if (name.endsWith('.md')) return '📝';
-  if (name.endsWith('.rs')) return '🦀';
-  if (name.endsWith('.toml') || name.endsWith('.yaml') || name.endsWith('.yml')) return '⚙️';
-  if (name.endsWith('.css') || name.endsWith('.html')) return '🎨';
-  return '📄';
-}
 
 interface FileNodeProps {
   node: FileNodeDTO;
@@ -33,7 +22,7 @@ export function FileNode({ node, depth, expanded, onToggleDir, onFile }: FileNod
           onClick={() => onToggleDir(node.path)}
         >
           <span className="ft-caret">▶</span>
-          <span className="ft-icon">{open ? '📂' : '📁'}</span>
+          <span className="ft-icon dir">{open ? <FolderOpenOutlined /> : <FolderOutlined />}</span>
           <span className="ft-name" title={node.name}>
             {node.name}
           </span>
@@ -56,7 +45,9 @@ export function FileNode({ node, depth, expanded, onToggleDir, onFile }: FileNod
   return (
     <div className="ft-row ft-file" style={pad} onClick={() => onFile(node.path)}>
       <span className="ft-caret" />
-      <span className="ft-icon">{fileIcon(node.name)}</span>
+      <span className="ft-icon">
+        <FileTextOutlined />
+      </span>
       <span className="ft-name" title={node.name}>
         {node.name}
       </span>

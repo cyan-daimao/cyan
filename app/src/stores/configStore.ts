@@ -5,6 +5,7 @@ import type {
   PermAction,
   PermMode,
   PermRuleDTO,
+  RuleScope,
   SaveModelRequest,
 } from '../types';
 import * as configApi from '../services/config';
@@ -12,26 +13,70 @@ import { errText, toast } from '../utils/feedback';
 
 const PERM_MODE_KEY = 'cyan.permMode';
 const ACTIVE_MODEL_KEY = 'cyan.activeModel';
+const DISABLED_TOOLS_KEY = 'cyan.disabledTools';
+const LANG_KEY = 'cyan.lang';
+const THEME_COLOR_KEY = 'cyan.themeColor';
+const BG_MODE_KEY = 'cyan.bgMode';
 
 function loadPermMode(): PermMode {
   const v = localStorage.getItem(PERM_MODE_KEY);
   return v === 'plan' || v === 'ask' || v === 'auto' ? v : 'ask';
 }
 
+function loadJson<T>(key: string, fallback: T): T {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? (JSON.parse(v) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** 界面语言 */
+export type Lang = 'zh' | 'en';
+
+/** 背景主题 */
+export type BgMode = 'light' | 'dark';
+
+/** 预设主题色 */
+export const THEME_COLORS = [
+  { name: '青色（默认）', value: '#00B39E' },
+  { name: '蓝色', value: '#3AA8FF' },
+  { name: '紫色', value: '#7C5CFF' },
+  { name: '绿色', value: '#22C55E' },
+  { name: '橙色', value: '#F59E0B' },
+] as const;
+
 interface ConfigState {
   models: ModelDTO[];
   mcpServers: McpServerDTO[];
+  /** 当前会话可见的权限规则（全局 + 本项目 + 本会话） */
   permRules: PermRuleDTO[];
+  /** 全局权限规则（设置页管理） */
+  globalRules: PermRuleDTO[];
   /** 权限模式（PRD 2.2，默认 ask） */
   permMode: PermMode;
   /** 输入区当前选中的模型名（send_task 按模型名传参） */
   activeModel: string | null;
+  /** 「能力」面板禁用的内置工具名（随 send_task 下发） */
+  disabledTools: string[];
+  /** 界面语言（antd locale 级别） */
+  lang: Lang;
+  /** 主题色（antd colorPrimary + CSS 品牌变量） */
+  themeColor: string;
+  /** 背景主题（浅色/深色） */
+  bgMode: BgMode;
   loadingModels: boolean;
   loadingMcp: boolean;
   loadingPerms: boolean;
 
   setPermMode: (mode: PermMode) => void;
   setActiveModel: (name: string) => void;
+  /** 切换内置工具启用状态 */
+  setToolEnabled: (name: string, enabled: boolean) => void;
+  setLang: (lang: Lang) => void;
+  setThemeColor: (color: string) => void;
+  setBgMode: (mode: BgMode) => void;
   loadAll: () => Promise<void>;
 
   /* ---- 模型 ---- */
@@ -46,15 +91,20 @@ interface ConfigState {
   toggleMcp: (id: number, enable: boolean) => Promise<boolean>;
   deleteMcp: (id: number) => Promise<boolean>;
 
-  /* ---- 权限规则 ---- */
-  loadPermRules: () => Promise<void>;
+  /* ---- 权限规则（三级作用域） ---- */
+  loadVisibleRules: (sessionId: number, projectId: number) => Promise<void>;
+  loadGlobalRules: () => Promise<void>;
   savePermRule: (
     id: number | undefined,
+    scope: RuleScope | undefined,
+    projectId: number | undefined,
+    sessionId: number | undefined,
     tool: string,
     pattern: string,
     action: PermAction,
     sort: number,
   ) => Promise<boolean>;
+  /** 删除规则（不自动刷新列表，由调用方按上下文刷新） */
   deletePermRule: (id: number) => Promise<boolean>;
 }
 
@@ -62,8 +112,13 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   models: [],
   mcpServers: [],
   permRules: [],
+  globalRules: [],
   permMode: loadPermMode(),
   activeModel: localStorage.getItem(ACTIVE_MODEL_KEY),
+  disabledTools: loadJson<string[]>(DISABLED_TOOLS_KEY, []),
+  lang: loadJson<Lang>(LANG_KEY, 'zh'),
+  themeColor: localStorage.getItem(THEME_COLOR_KEY) ?? THEME_COLORS[0].value,
+  bgMode: loadJson<BgMode>(BG_MODE_KEY, 'light'),
   loadingModels: false,
   loadingMcp: false,
   loadingPerms: false,
@@ -78,8 +133,31 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     set({ activeModel: name });
   },
 
+  setToolEnabled: (name, enabled) => {
+    const cur = get().disabledTools;
+    const next = enabled ? cur.filter((t) => t !== name) : [...new Set([...cur, name])];
+    localStorage.setItem(DISABLED_TOOLS_KEY, JSON.stringify(next));
+    set({ disabledTools: next });
+  },
+
+  setLang: (lang) => {
+    localStorage.setItem(LANG_KEY, JSON.stringify(lang));
+    set({ lang });
+  },
+
+  setThemeColor: (color) => {
+    localStorage.setItem(THEME_COLOR_KEY, color);
+    set({ themeColor: color });
+  },
+
+  setBgMode: (mode) => {
+    localStorage.setItem(BG_MODE_KEY, JSON.stringify(mode));
+    set({ bgMode: mode });
+  },
+
   loadAll: async () => {
-    await Promise.all([get().loadModels(), get().loadMcpServers(), get().loadPermRules()]);
+    // 权限规则为对话级，不在此处加载（由会话入口按 sessionId 加载）
+    await Promise.all([get().loadModels(), get().loadMcpServers()]);
   },
 
   /* ---- 模型 ---- */
@@ -186,12 +264,12 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     }
   },
 
-  /* ---- 权限规则 ---- */
+  /* ---- 权限规则（三级作用域：全局 / 本项目 / 本会话） ---- */
 
-  loadPermRules: async () => {
+  loadVisibleRules: async (sessionId, projectId) => {
     set({ loadingPerms: true });
     try {
-      set({ permRules: await configApi.listPermRules() });
+      set({ permRules: await configApi.listVisiblePermRules(sessionId, projectId) });
     } catch (e) {
       toast.error(`加载权限规则失败：${errText(e)}`);
     } finally {
@@ -199,10 +277,17 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     }
   },
 
-  savePermRule: async (id, tool, pattern, action, sort) => {
+  loadGlobalRules: async () => {
     try {
-      await configApi.savePermRule(id, tool, pattern, action, sort);
-      await get().loadPermRules();
+      set({ globalRules: await configApi.listGlobalPermRules() });
+    } catch (e) {
+      toast.error(`加载全局规则失败：${errText(e)}`);
+    }
+  },
+
+  savePermRule: async (id, scope, projectId, sessionId, tool, pattern, action, sort) => {
+    try {
+      await configApi.savePermRule(id, scope, projectId, sessionId, tool, pattern, action, sort);
       return true;
     } catch (e) {
       toast.error(errText(e));
@@ -213,7 +298,6 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   deletePermRule: async (id) => {
     try {
       await configApi.deletePermRule(id);
-      await get().loadPermRules();
       return true;
     } catch (e) {
       toast.error(errText(e));

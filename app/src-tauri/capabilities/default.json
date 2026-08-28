@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "cyan 默认窗口权限",
   "windows": ["main"],
-  "permissions": ["core:default", "core:event:default", "core:window:default"]
+  "permissions": ["core:default", "core:event:default", "core:window:default", "dialog:default", "dialog:allow-open"]
 }

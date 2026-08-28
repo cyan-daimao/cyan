@@ -36,11 +36,47 @@ impl PermAction {
     }
 }
 
+/// 规则作用域
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleScope {
+    /// 全局：对所有项目/会话生效
+    Global,
+    /// 项目：对该项目下所有会话生效
+    Project,
+    /// 会话：仅当前会话生效
+    Session,
+}
+
+impl RuleScope {
+    /// 存储字符串
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Project => "project",
+            Self::Session => "session",
+        }
+    }
+
+    /// 从存储字符串解析
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "global" => Some(Self::Global),
+            "project" => Some(Self::Project),
+            "session" => Some(Self::Session),
+            _ => None,
+        }
+    }
+}
+
 /// 用户权限规则（sort 升序自上而下匹配，首个命中生效）
 #[derive(Debug, Clone)]
 pub struct PermissionRule {
     /// 主键 id（插入后回填）
     pub id: i64,
+    /// 所属项目 id（项目级/会话级规则；None 且 session_id 为 None = 全局）
+    pub project_id: Option<i64>,
+    /// 所属会话 id（Some = 会话级规则）
+    pub session_id: Option<i64>,
     /// 工具名（`*` 表示全部工具）
     pub tool: String,
     /// glob 匹配模式（作用于工具目标：文件路径或 Bash 命令串）
@@ -49,6 +85,8 @@ pub struct PermissionRule {
     pub action: PermAction,
     /// 匹配顺序（升序）
     pub sort: i64,
+    /// 来源插件名（None = 用户自建）
+    pub plugin_origin: Option<String>,
     /// 创建时间
     pub created_at: NaiveDateTime,
     /// 更新时间
@@ -56,6 +94,16 @@ pub struct PermissionRule {
 }
 
 impl PermissionRule {
+    /// 推导作用域
+    pub fn scope(&self) -> RuleScope {
+        if self.session_id.is_some() {
+            RuleScope::Session
+        } else if self.project_id.is_some() {
+            RuleScope::Project
+        } else {
+            RuleScope::Global
+        }
+    }
     /// 校验：工具名/pattern 非空且 pattern 为合法 glob
     pub fn validate(&self) -> Result<(), DomainError> {
         if self.tool.trim().is_empty() {
@@ -94,10 +142,14 @@ impl PermissionRule {
         let now = chrono::Local::now().naive_local();
         Self {
             id: 0,
+            // 调用方按场景回填：对话级规则 = Some(session_id)
+            project_id: None,
+            session_id: None,
             tool: tool.to_string(),
             pattern,
             action: PermAction::Allow,
             sort: 0,
+            plugin_origin: None,
             created_at: now,
             updated_at: now,
         }
@@ -137,10 +189,13 @@ mod tests {
         let now = NaiveDateTime::default();
         let r = PermissionRule {
             id: 0,
+            project_id: None,
+            session_id: None,
             tool: "*".into(),
             pattern: "docs/**".into(),
             action: PermAction::Allow,
             sort: 0,
+            plugin_origin: None,
             created_at: now,
             updated_at: now,
         };

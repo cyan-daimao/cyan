@@ -21,6 +21,8 @@ pub trait SessionRepository: Send + Sync {
     async fn update(&self, session: &Session) -> anyhow::Result<()>;
     /// 软删除
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
+    /// 按项目聚合 token 用量（输入、输出、会话数，过滤软删）
+    async fn sum_tokens_by_project(&self, project_id: i64) -> anyhow::Result<(i64, i64, i64)>;
 }
 
 /// 消息仓储
@@ -30,6 +32,8 @@ pub trait MessageRepository: Send + Sync {
     async fn list_by_session(&self, session_id: i64) -> anyhow::Result<Vec<Message>>;
     /// 插入并回填自增 id
     async fn insert(&self, message: &mut Message) -> anyhow::Result<()>;
+    /// 更新消息载荷（审批 pending → 最终决断）
+    async fn update_payload(&self, id: i64, payload: &str) -> anyhow::Result<()>;
     /// 软删除会话全部消息
     async fn soft_delete_by_session(&self, session_id: i64) -> anyhow::Result<()>;
 }

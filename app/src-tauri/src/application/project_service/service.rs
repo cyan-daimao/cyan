@@ -11,7 +11,7 @@ use crate::infra::{fs, git};
 
 use super::{
     CreateProjectCmd, FileNodeBO, FilePreviewBO, FilePreviewQuery, FileTreeQuery, OpenProjectCmd,
-    ProjectBO,
+    ProjectBO, RemoveProjectCmd,
 };
 
 /// 项目服务
@@ -23,6 +23,8 @@ pub trait ProjectService: Send + Sync {
     async fn open_project(&self, cmd: OpenProjectCmd) -> Result<ProjectBO, ServiceError>;
     /// 新建项目（脚手架）
     async fn create_project(&self, cmd: CreateProjectCmd) -> Result<ProjectBO, ServiceError>;
+    /// 移除项目（软删记录，不删磁盘文件；幂等：未注册直接成功）
+    async fn remove_project(&self, cmd: RemoveProjectCmd) -> Result<(), ServiceError>;
     /// 文件树
     async fn file_tree(&self, query: FileTreeQuery) -> Result<Vec<FileNodeBO>, ServiceError>;
     /// 文件预览（≤64KB）
@@ -84,6 +86,14 @@ impl ProjectService for ProjectServiceImpl {
         let mut project = Project::from_path(&root, now_local());
         self.project_repo.insert(&mut project).await?;
         Ok(ProjectBO::from(project))
+    }
+
+    async fn remove_project(&self, cmd: RemoveProjectCmd) -> Result<(), ServiceError> {
+        // 幂等：未注册的项目直接视为已移除
+        if let Some(project) = self.project_repo.find_by_path(&cmd.path).await? {
+            self.project_repo.soft_delete(project.id).await?;
+        }
+        Ok(())
     }
 
     async fn file_tree(&self, query: FileTreeQuery) -> Result<Vec<FileNodeBO>, ServiceError> {

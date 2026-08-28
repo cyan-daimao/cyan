@@ -5,7 +5,7 @@ mod cmd;
 mod query;
 mod service;
 
-pub use bo::{MessageBO, SessionBO, SessionSummaryBO};
+pub use bo::{MessageBO, ProjectTokenUsageBO, SessionBO, SessionSummaryBO};
 pub use cmd::{AppendMessageCmd, CreateSessionCmd, DeleteSessionCmd};
-pub use query::{GetSessionQuery, ListSessionQuery};
+pub use query::{GetSessionQuery, ListSessionQuery, ProjectTokenUsageQuery};
 pub use service::{SessionService, SessionServiceImpl};

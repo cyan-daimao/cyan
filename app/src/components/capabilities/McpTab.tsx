@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Alert, Button, Table, Tag, Tooltip } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { McpServerDTO } from '../../types';
 import { useConfigStore } from '../../stores/configStore';
@@ -124,12 +125,13 @@ export function McpTab() {
         <span style={{ color: 'var(--text-2)' }}>已配置 {servers.length} 个服务器</span>
         <Button
           type="primary"
+          icon={<PlusOutlined />}
           onClick={() => {
             setEditing(null);
             setFormOpen(true);
           }}
         >
-          ＋ 新增服务器
+          新增服务器
         </Button>
       </div>
       <Table<McpServerDTO>

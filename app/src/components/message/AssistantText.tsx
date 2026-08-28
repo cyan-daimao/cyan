@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import logoUrl from '../../assets/logo.png';
 
 interface AssistantTextProps {
@@ -8,7 +10,7 @@ interface AssistantTextProps {
   streaming?: boolean;
 }
 
-/** 助手消息：头像 + 可折叠思考过程区块 + 文本，流式时尾部闪烁光标 */
+/** 助手消息：头像 + 可折叠思考过程区块 + Markdown 正文，流式时尾部闪烁光标 */
 export function AssistantText({ text, thinking, streaming }: AssistantTextProps) {
   // 流式期间思考块默认展开，结束后默认折叠为摘要行
   const [thinkingOpen, setThinkingOpen] = useState(true);
@@ -37,7 +39,9 @@ export function AssistantText({ text, thinking, streaming }: AssistantTextProps)
             ) : null}
           </div>
         ) : null}
-        {text}
+        <div className="md-body">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+        </div>
         {streaming && (text || !thinking) ? <span className="cursor" /> : null}
       </div>
     </div>

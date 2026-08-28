@@ -5,6 +5,7 @@ import type {
   ApprovalState,
   ChangeView,
   ChatNode,
+  RuleScope,
   RunState,
   TodoDTO,
   Tokens,
@@ -31,11 +32,16 @@ interface PendingApproval {
   reason: string;
 }
 
+/** 单个会话的运行标记（驱动会话列表右侧的 loading / 完成指示） */
+export type SessionRunFlag = 'running' | 'waiting_approval' | 'done' | 'error';
+
 interface AgentState {
-  /** 会话运行状态机（PRD 8.1） */
+  /** 会话运行状态机（PRD 8.1）——当前激活会话的视图态 */
   runState: RunState;
-  /** 正在运行的会话 id（后端 i64） */
+  /** 正在运行的会话 id（后端 i64）——当前激活会话视角 */
   runSessionId: number | null;
+  /** 全部会话的运行标记（跨项目并发运行，sessionId → 状态） */
+  sessionRuns: Record<number, SessionRunFlag>;
   todos: TodoDTO[];
   /** 本次会话的文件变更（含 diff 快照） */
   changes: ChangeView[];
@@ -50,21 +56,27 @@ interface AgentState {
   send: (text: string) => Promise<boolean>;
   /** 中断当前运行（Esc / 停止键） */
   interrupt: () => Promise<void>;
-  /** 审批决断（允许一次 / 总是允许 / 拒绝） */
-  decide: (callId: string, decision: ApprovalDecision) => Promise<void>;
+  /** 审批决断（允许一次 / 总是允许 / 拒绝）；alwaysScope 为「总是允许」的规则作用域 */
+  decide: (callId: string, decision: ApprovalDecision, alwaysScope?: RuleScope) => Promise<void>;
   /** checkpoint 回滚 */
   rollback: (changeId: number) => Promise<void>;
   /** 切换会话后同步运行态展示 */
   resetForSession: (summary?: { ctx: number; tokens: Tokens }) => void;
+  /** 打开会话后清除其完成/出错标记 */
+  clearSessionFlag: (sessionId: number) => void;
   /** agent:event 统一入口（TECH_DESIGN 2.4） */
   onAgentEvent: (evt: AgentEvent) => void;
 }
 
 const EMPTY_TOKENS: Tokens = { input: 0, output: 0 };
 
+/** 标记是否处于运行中（含等待审批） */
+const isBusyFlag = (f?: SessionRunFlag) => f === 'running' || f === 'waiting_approval';
+
 export const useAgentStore = create<AgentState>((set, get) => ({
   runState: 'idle',
   runSessionId: null,
+  sessionRuns: {},
   todos: [],
   changes: [],
   ctxPercent: 0,
@@ -78,11 +90,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       toast.warning('请输入任务描述');
       return false;
     }
-    const state = get().runState;
-    if (state === 'running' || state === 'waiting_approval') {
-      toast.warning('Agent 运行中，请先停止当前任务');
-      return false;
-    }
     const project = useProjectStore.getState().current;
     if (!project) {
       toast.warning('请先打开一个项目');
@@ -94,6 +101,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       sessionId = await useSessionStore.getState().createSession(project.path);
       if (sessionId === null) return false;
     }
+    // 并发语义：仅拦截「当前会话」的运行，其他会话/项目的任务互不阻塞
+    if (isBusyFlag(get().sessionRuns[sessionId])) {
+      toast.warning('当前会话已有任务运行中，请先停止或切换会话');
+      return false;
+    }
     const cfg = useConfigStore.getState();
     const model =
       cfg.activeModel ??
@@ -104,12 +116,18 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       return false;
     }
     useSessionStore.getState().pushNode({ id: newNodeId(), kind: 'user', text: trimmed });
-    set({ runState: 'running', runSessionId: sessionId, phase: 'thinking' });
+    set({
+      runState: 'running',
+      runSessionId: sessionId,
+      phase: 'thinking',
+      sessionRuns: { ...get().sessionRuns, [sessionId]: 'running' },
+    });
     try {
-      await sendTask(sessionId, trimmed, model, cfg.permMode);
+      await sendTask(sessionId, trimmed, model, cfg.permMode, cfg.disabledTools);
       return true;
     } catch (e) {
-      set({ runState: 'idle', runSessionId: null, phase: null });
+      const { [sessionId]: _drop, ...rest } = get().sessionRuns;
+      set({ runState: 'idle', runSessionId: null, phase: null, sessionRuns: rest });
       useSessionStore.getState().pushNode({
         id: newNodeId(),
         kind: 'system',
@@ -130,11 +148,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
-  decide: async (callId, decision) => {
+  decide: async (callId, decision, alwaysScope) => {
     const { runSessionId } = get();
     if (runSessionId === null) return;
     try {
-      await approve(runSessionId, callId, decision);
+      await approve(runSessionId, callId, decision, alwaysScope);
       // 卡片状态更新等待 approval_resolved 事件，保证与后端一致
     } catch (e) {
       toast.error(`审批提交失败：${errText(e)}`);
@@ -154,28 +172,49 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   resetForSession: (summary) => {
+    // 视图态对齐到新激活会话：该会话正在运行时恢复 running 视图（停止键/思考气泡）
+    const sid = useSessionStore.getState().activeId;
+    const flag = sid !== null ? get().sessionRuns[sid] : undefined;
+    const busy = isBusyFlag(flag);
     set({
       todos: [],
       changes: [],
       pendingApproval: null,
-      phase: null,
+      runState: busy ? (flag as RunState) : 'idle',
+      runSessionId: busy ? sid : null,
+      // 等待审批的会话切回来显示 approval 阶段（审批卡已从 DB 还原），而非误导性的思考中
+      phase: flag === 'waiting_approval' ? 'approval' : busy ? 'thinking' : null,
       ctxPercent: summary?.ctx ?? 0,
       tokens: summary?.tokens ?? EMPTY_TOKENS,
     });
   },
 
+  clearSessionFlag: (sessionId) => {
+    const flag = get().sessionRuns[sessionId];
+    if (flag !== 'done' && flag !== 'error') return;
+    const { [sessionId]: _drop, ...rest } = get().sessionRuns;
+    set({ sessionRuns: rest });
+  },
+
   onAgentEvent: (evt) => {
     const ss = useSessionStore.getState();
+    // 多会话并发：消息流与视图态只对「激活会话」生效；运行标记对所有会话生效
+    const isActive = evt.sessionId === ss.activeId;
+    const mark = (flag: SessionRunFlag) =>
+      set({ sessionRuns: { ...get().sessionRuns, [evt.sessionId]: flag } });
     switch (evt.type) {
       case 'text_delta':
+        if (!isActive) break;
         set({ phase: 'streaming' });
         ss.appendDelta(evt.delta);
         break;
       case 'thinking_delta':
+        if (!isActive) break;
         set({ phase: 'streaming' });
         ss.appendThinkingDelta(evt.delta);
         break;
       case 'tool_start':
+        if (!isActive) break;
         set({ phase: 'tool' });
         ss.endStreaming();
         ss.pushNode({
@@ -188,6 +227,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         });
         break;
       case 'tool_end':
+        if (!isActive) break;
         set({ phase: 'thinking' });
         ss.updateTool(evt.callId, {
           status: evt.status,
@@ -198,6 +238,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         });
         break;
       case 'approval_required':
+        mark('waiting_approval');
+        if (!isActive) break;
         ss.endStreaming();
         set({
           runState: 'waiting_approval',
@@ -215,6 +257,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         });
         break;
       case 'approval_resolved': {
+        mark('running');
         const map: Record<string, Exclude<ApprovalState, 'pending'>> = {
           once: 'allowed',
           always: 'always',
@@ -222,19 +265,27 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           reject: 'rejected',
           abort: 'rejected',
         };
-        ss.updateApproval(evt.callId, map[evt.decision] ?? 'rejected');
-        set({ pendingApproval: null, runState: 'running', phase: 'thinking' });
+        if (isActive) {
+          ss.updateApproval(evt.callId, map[evt.decision] ?? 'rejected');
+          set({ pendingApproval: null, runState: 'running', phase: 'thinking' });
+        }
         if (evt.decision === 'always') {
-          // 「总是允许」后端已写入 allow 规则，刷新权限规则表（PRD 验收 3）
-          void useConfigStore.getState().loadPermRules();
+          // 「总是允许」后端已按所选作用域落库，刷新可见规则与全局规则
+          const project = useProjectStore.getState().current;
+          if (project) {
+            void useConfigStore.getState().loadVisibleRules(evt.sessionId, project.id);
+          }
+          void useConfigStore.getState().loadGlobalRules();
           toast.success('已加入白名单，后续自动放行');
         }
         break;
       }
       case 'todo_update':
+        if (!isActive) break;
         set({ todos: evt.todos });
         break;
       case 'change_add': {
+        if (!isActive) break;
         // 从对应 Edit/Write 工具卡捕获 diff 快照（验收 11：查看内容与原 Edit 卡一致）
         const toolNode = [...ss.messages]
           .reverse()
@@ -247,9 +298,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         break;
       }
       case 'ctx_update':
+        if (!isActive) break;
         set({ ctxPercent: evt.ctxPercent, tokens: evt.tokens });
         break;
       case 'compacted':
+        if (!isActive) break;
         ss.pushNode({
           id: newNodeId(),
           kind: 'system',
@@ -257,6 +310,19 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         });
         break;
       case 'run_end': {
+        mark(evt.result === 'error' ? 'error' : 'done');
+        // 运行结束刷新会话列表（标题 / ctx / tokens 已变化）
+        const project = useProjectStore.getState().current;
+        if (project) {
+          void useSessionStore
+            .getState()
+            .loadSessions(project.path, useSessionStore.getState().searchKw || undefined);
+        }
+        if (!isActive) {
+          if (evt.result === 'done') toast.success('后台会话任务已完成');
+          else if (evt.result === 'error') toast.error('后台会话任务出错');
+          break;
+        }
         ss.endStreaming();
         set({
           pendingApproval: null,
@@ -278,13 +344,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             text: `⚠️ 运行出错：${evt.message ?? '未知错误'}`,
           });
           toast.error('Agent 运行出错，请重试');
-        }
-        // 运行结束刷新会话列表（标题 / ctx / tokens 已变化）
-        const project = useProjectStore.getState().current;
-        if (project) {
-          void useSessionStore
-            .getState()
-            .loadSessions(project.path, useSessionStore.getState().searchKw || undefined);
         }
         break;
       }

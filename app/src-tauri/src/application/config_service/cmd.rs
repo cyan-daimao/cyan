@@ -60,11 +60,17 @@ pub struct DeleteMcpCmd {
     pub id: i64,
 }
 
-/// 保存权限规则命令（按 tool+pattern 幂等 upsert）
+/// 保存权限规则命令（新建按 scope+tool+pattern 幂等 upsert；编辑按 id，沿用原范围）
 #[derive(Debug, Clone)]
 pub struct SavePermRuleCmd {
     /// 规则 id（编辑时携带）
     pub id: Option<i64>,
+    /// 作用域（global/project/session，新建时必填）
+    pub scope: String,
+    /// 项目 id（scope 为 project/session 时必填）
+    pub project_id: Option<i64>,
+    /// 会话 id（scope 为 session 时必填）
+    pub session_id: Option<i64>,
     /// 工具名（`*` 表示全部）
     pub tool: String,
     /// glob 匹配模式

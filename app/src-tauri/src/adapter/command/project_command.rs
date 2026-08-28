@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::adapter::dto::{CreateProjectRequest, OpenProjectRequest, ProjectDTO};
+use crate::adapter::dto::{CreateProjectRequest, OpenProjectRequest, ProjectDTO, RemoveProjectRequest};
 use crate::application::project_service::ProjectService;
 use crate::error::ServiceError;
 
@@ -35,4 +35,13 @@ pub async fn create_project(
 ) -> Result<ProjectDTO, ServiceError> {
     let bo = svc.create_project(request.into()).await?;
     Ok(ProjectDTO::from(bo))
+}
+
+/// 移除项目（软删，不删磁盘文件，幂等）
+#[tauri::command]
+pub async fn remove_project(
+    svc: State<'_, Arc<dyn ProjectService>>,
+    request: RemoveProjectRequest,
+) -> Result<(), ServiceError> {
+    svc.remove_project(request.into()).await
 }

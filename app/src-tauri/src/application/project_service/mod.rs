@@ -6,6 +6,6 @@ mod query;
 mod service;
 
 pub use bo::{FileNodeBO, FilePreviewBO, ProjectBO};
-pub use cmd::{CreateProjectCmd, OpenProjectCmd};
+pub use cmd::{CreateProjectCmd, OpenProjectCmd, RemoveProjectCmd};
 pub use query::{FilePreviewQuery, FileTreeQuery};
 pub use service::{ProjectService, ProjectServiceImpl};

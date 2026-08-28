@@ -13,7 +13,7 @@ use crate::infra::db::now_local;
 
 use super::{
     AppendMessageCmd, CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery,
-    MessageBO, SessionBO, SessionSummaryBO,
+    MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, SessionBO, SessionSummaryBO,
 };
 
 /// 会话服务
@@ -29,6 +29,11 @@ pub trait SessionService: Send + Sync {
     async fn delete_session(&self, cmd: DeleteSessionCmd) -> Result<(), ServiceError>;
     /// 追加消息（AgentService 复用）
     async fn append_message(&self, cmd: AppendMessageCmd) -> Result<MessageBO, ServiceError>;
+    /// 项目级 token 用量聚合
+    async fn token_usage(
+        &self,
+        query: ProjectTokenUsageQuery,
+    ) -> Result<ProjectTokenUsageBO, ServiceError>;
 }
 
 /// 会话服务实现
@@ -108,5 +113,23 @@ impl SessionService for SessionServiceImpl {
         let mut message = session.append_message(message).clone();
         self.message_repo.insert(&mut message).await?;
         Ok(MessageBO::from(message))
+    }
+
+    async fn token_usage(
+        &self,
+        query: ProjectTokenUsageQuery,
+    ) -> Result<ProjectTokenUsageBO, ServiceError> {
+        let project = self
+            .project_repo
+            .find_by_path(&query.project_path)
+            .await?
+            .ok_or_else(|| ServiceError::not_found("项目未注册，请先打开项目"))?;
+        let (input_tokens, output_tokens, session_count) =
+            self.session_repo.sum_tokens_by_project(project.id).await?;
+        Ok(ProjectTokenUsageBO {
+            input_tokens,
+            output_tokens,
+            session_count,
+        })
     }
 }

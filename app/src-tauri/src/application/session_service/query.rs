@@ -15,3 +15,10 @@ pub struct GetSessionQuery {
     /// 会话 id
     pub session_id: i64,
 }
+
+/// 项目 token 用量查询
+#[derive(Debug, Clone)]
+pub struct ProjectTokenUsageQuery {
+    /// 项目路径
+    pub project_path: String,
+}

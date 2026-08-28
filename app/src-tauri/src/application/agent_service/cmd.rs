@@ -11,6 +11,8 @@ pub struct StartRunCmd {
     pub model: String,
     /// 权限模式（ask/auto/plan）
     pub perm_mode: String,
+    /// 本次运行禁用的内置工具名（前端「能力」面板配置）
+    pub disabled_tools: Vec<String>,
 }
 
 /// 中断当前运行命令
@@ -29,6 +31,8 @@ pub struct ApproveCmd {
     pub call_id: String,
     /// 决断（once/always/reject）
     pub decision: String,
+    /// 「总是允许」规则作用域（global/project/session，缺省 session）
+    pub always_scope: Option<String>,
 }
 
 /// 回滚变更命令

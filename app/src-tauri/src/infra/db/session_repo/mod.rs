@@ -208,6 +208,17 @@ impl SessionRepository for SessionRepositoryImpl {
         .await?;
         Ok(())
     }
+
+    async fn sum_tokens_by_project(&self, project_id: i64) -> anyhow::Result<(i64, i64, i64)> {
+        let row: (i64, i64, i64) = sqlx::query_as(
+            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(*)
+             FROM cyan_session WHERE project_id = ? AND deleted_at IS NULL",
+        )
+        .bind(project_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
 }
 
 /// 消息仓储 SQLx 实现
@@ -260,6 +271,19 @@ impl MessageRepository for MessageRepositoryImpl {
         Ok(())
     }
 
+    async fn update_payload(&self, id: i64, payload: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_message SET payload = ?, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(payload)
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn soft_delete_by_session(&self, session_id: i64) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE cyan_message SET deleted_at = ?, updated_by = 'local', updated_at = ?
@@ -309,6 +333,26 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn sum_tokens_by_project_aggregates_and_skips_soft_deleted(pool: SqlitePool) {
+        let project_id = seed_project(&pool).await;
+        let repo = SessionRepositoryImpl::new(pool.clone());
+
+        let mut s1 = Session::new(project_id, now_local());
+        s1.update_usage(100, 50, 10);
+        repo.insert(&mut s1).await.unwrap();
+        let mut s2 = Session::new(project_id, now_local());
+        s2.update_usage(200, 80, 20);
+        repo.insert(&mut s2).await.unwrap();
+
+        let (input, output, count) = repo.sum_tokens_by_project(project_id).await.unwrap();
+        assert_eq!((input, output, count), (300, 130, 2));
+
+        repo.soft_delete(s2.id).await.unwrap();
+        let (input, output, count) = repo.sum_tokens_by_project(project_id).await.unwrap();
+        assert_eq!((input, output, count), (100, 50, 1), "软删会话不应计入聚合");
     }
 
     #[sqlx::test(migrations = "./migrations")]

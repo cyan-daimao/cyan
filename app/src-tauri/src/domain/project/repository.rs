@@ -17,4 +17,6 @@ pub trait ProjectRepository: Send + Sync {
     async fn insert(&self, project: &mut Project) -> anyhow::Result<()>;
     /// 更新最近打开时间
     async fn touch_last_opened(&self, id: i64) -> anyhow::Result<()>;
+    /// 软删除（从最近项目移除，不删磁盘文件与会话记录）
+    async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
 }

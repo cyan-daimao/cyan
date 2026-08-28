@@ -17,6 +17,8 @@ pub struct SendTaskRequest {
     pub model: String,
     /// 权限模式（ask/auto/plan）
     pub perm_mode: String,
+    /// 禁用的内置工具名（前端「能力」面板配置）
+    pub disabled_tools: Option<Vec<String>>,
 }
 
 impl From<SendTaskRequest> for StartRunCmd {
@@ -26,6 +28,7 @@ impl From<SendTaskRequest> for StartRunCmd {
             text: r.text,
             model: r.model,
             perm_mode: r.perm_mode,
+            disabled_tools: r.disabled_tools.unwrap_or_default(),
         }
     }
 }
@@ -56,6 +59,8 @@ pub struct ApproveRequest {
     pub call_id: String,
     /// 决断（once/always/reject）
     pub decision: String,
+    /// 「总是允许」规则作用域（global/project/session，缺省 session）
+    pub always_scope: Option<String>,
 }
 
 impl From<ApproveRequest> for ApproveCmd {
@@ -64,6 +69,7 @@ impl From<ApproveRequest> for ApproveCmd {
             session_id: r.session_id,
             call_id: r.call_id,
             decision: r.decision,
+            always_scope: r.always_scope,
         }
     }
 }

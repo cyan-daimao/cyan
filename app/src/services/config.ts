@@ -4,6 +4,7 @@ import type {
   ModelDTO,
   PermAction,
   PermRuleDTO,
+  RuleScope,
   SaveModelRequest,
 } from '../types';
 
@@ -36,18 +37,29 @@ export const toggleMcpServer = (id: number, enable: boolean) =>
 export const deleteMcpServer = (id: number) =>
   call<void>('delete_mcp_server', { request: { id } });
 
-/* ---- 权限规则 ---- */
+/* ---- 权限规则（三级作用域：全局 / 本项目 / 本会话） ---- */
 
-export const listPermRules = () => call<PermRuleDTO[]>('list_perm_rules');
+/** 全局规则（设置页管理） */
+export const listGlobalPermRules = () => call<PermRuleDTO[]>('list_global_perm_rules');
 
-/** id 编辑时携带；sort 为必填匹配顺序 */
+/** 会话可见规则（全局 + 项目 + 会话） */
+export const listVisiblePermRules = (sessionId: number, projectId: number) =>
+  call<PermRuleDTO[]>('list_visible_perm_rules', { request: { sessionId, projectId } });
+
+/** id 编辑时携带；新建必须带 scope（project/session 需对应 id）；sort 为必填匹配顺序 */
 export const savePermRule = (
   id: number | undefined,
+  scope: RuleScope | undefined,
+  projectId: number | undefined,
+  sessionId: number | undefined,
   tool: string,
   pattern: string,
   action: PermAction,
   sort: number,
-) => call<PermRuleDTO>('save_perm_rule', { request: { id, tool, pattern, action, sort } });
+) =>
+  call<PermRuleDTO>('save_perm_rule', {
+    request: { id, scope, projectId, sessionId, tool, pattern, action, sort },
+  });
 
 export const deletePermRule = (id: number) =>
   call<void>('delete_perm_rule', { request: { id } });

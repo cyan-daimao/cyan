@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::application::project_service::{CreateProjectCmd, OpenProjectCmd, ProjectBO};
+use crate::application::project_service::{
+    CreateProjectCmd, OpenProjectCmd, ProjectBO, RemoveProjectCmd,
+};
 use crate::infra::db::fmt_time;
 
 /// open_project 请求
@@ -41,6 +43,20 @@ impl From<CreateProjectRequest> for CreateProjectCmd {
             template: r.template,
             git_init: r.git_init,
         }
+    }
+}
+
+/// remove_project 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveProjectRequest {
+    /// 项目目录路径
+    pub path: String,
+}
+
+impl From<RemoveProjectRequest> for RemoveProjectCmd {
+    fn from(r: RemoveProjectRequest) -> Self {
+        Self { path: r.path }
     }
 }
 
