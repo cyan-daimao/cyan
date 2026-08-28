@@ -92,6 +92,8 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 输入法组合中（拼音候选未上屏）：按键交给 IME，不触发发送/补全/中断
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     // 技能补全打开时：上下键移动、Enter 选中、Esc 关闭（不触发发送/中断）
     if (suggestOpen) {
       if (e.key === 'ArrowDown') {
