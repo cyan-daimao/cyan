@@ -36,6 +36,7 @@ export default function ChatPage() {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const messages = useSessionStore((s) => s.messages);
+  const activeId = useSessionStore((s) => s.activeId);
   const project = useProjectStore((s) => s.current);
 
   /* 窄屏（<860px）侧栏默认收起 */
@@ -80,25 +81,6 @@ export default function ChatPage() {
   }, []);
 
   /* ---- 侧栏动作 ---- */
-
-  const onNewSession = useCallback(() => {
-    if (guardBusy('新建会话')) return;
-    const cur = useProjectStore.getState().current;
-    if (!cur) {
-      toast.warning('请先打开一个项目');
-      return;
-    }
-    void useSessionStore
-      .getState()
-      .createSession(cur.path)
-      .then((id) => {
-        if (id !== null) {
-          useAgentStore.getState().resetForSession();
-          setSearchParams({ s: String(id) });
-          focusInput();
-        }
-      });
-  }, [focusInput, setSearchParams]);
 
   const onOpenProject = useCallback(() => {
     if (guardBusy('切换项目')) return;
@@ -177,7 +159,6 @@ export default function ChatPage() {
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((v) => !v)}
-        onNewSession={onNewSession}
         onOpenProject={onOpenProject}
         onOpenSettings={onOpenSettings}
         onSelectSession={onSelectSession}
@@ -200,7 +181,7 @@ export default function ChatPage() {
               {messages.length === 0 ? (
                 <EmptyState onPick={fillDraft} />
               ) : (
-                <MessageList messages={messages} />
+                <MessageList key={activeId ?? 'none'} messages={messages} />
               )}
             </div>
             <InputArea draft={draft} onDraftChange={setDraft} inputRef={inputRef} />

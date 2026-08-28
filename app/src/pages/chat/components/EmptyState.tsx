@@ -1,6 +1,5 @@
 import { useConfigStore } from '../../../stores/configStore';
 import { useProjectStore } from '../../../stores/projectStore';
-import { toast } from '../../../utils/feedback';
 import type { PermMode } from '../../../types';
 
 const PERM_LABEL: Record<PermMode, string> = { plan: '计划', ask: '询问', auto: '自动' };
@@ -17,7 +16,7 @@ interface EmptyStateProps {
   onPick: (text: string) => void;
 }
 
-/** 空状态：渐变大标题 + 对话/工作胶囊 + 推荐项 + 环境信息行 */
+/** 空状态：渐变大标题 + 推荐项 + 环境信息行 */
 export function EmptyState({ onPick }: EmptyStateProps) {
   const project = useProjectStore((s) => s.current);
   const permMode = useConfigStore((s) => s.permMode);
@@ -26,15 +25,6 @@ export function EmptyState({ onPick }: EmptyStateProps) {
   return (
     <div className="empty-state">
       <div className="greet">有什么我能帮你的吗？</div>
-      <div className="mode-pill">
-        <button className="mp-item active">对话</button>
-        <button
-          className="mp-item"
-          onClick={() => toast.info('工作模式（多步任务编排）：敬请期待')}
-        >
-          工作
-        </button>
-      </div>
       <div className="rec-wrap">
         <div className="rec-label">为你推荐</div>
         {RECOMMENDATIONS.map((r) => (

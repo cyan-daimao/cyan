@@ -17,7 +17,6 @@ const PERM_DESC: Record<PermMode, string> = {
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
-  onNewSession: () => void;
   onOpenProject: () => void;
   onOpenSettings: (tab: 'models' | 'mcp') => void;
   onSelectSession: (id: number) => void;
@@ -28,7 +27,6 @@ interface SidebarProps {
 export function Sidebar({
   collapsed,
   onToggle,
-  onNewSession,
   onOpenProject,
   onOpenSettings,
   onSelectSession,
@@ -61,9 +59,6 @@ export function Sidebar({
             ‹
           </button>
         </div>
-        <button className="nav-item" onClick={onNewSession}>
-          ✨ 新工作任务
-        </button>
         <button className="nav-item" title="切换 / 新建项目" onClick={onOpenProject}>
           📁 项目<span className="nav-sub mono">{project?.name ?? '未打开'}</span>
         </button>

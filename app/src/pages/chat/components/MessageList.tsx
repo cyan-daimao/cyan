@@ -52,6 +52,8 @@ export function MessageList({ messages }: MessageListProps) {
   return (
     <Virtuoso
       data={messages}
+      // 打开/切换会话时直接定位到末尾（父组件以会话 id 作为 key 触发重挂载）
+      initialTopMostItemIndex={Math.max(messages.length - 1, 0)}
       followOutput="auto"
       defaultItemHeight={48}
       itemContent={(_, node) => (

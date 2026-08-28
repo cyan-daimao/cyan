@@ -22,7 +22,7 @@ export function SessionList({ sessions, activeId, onSelect, onDelete }: SessionL
   }, [sessions]);
 
   if (sessions.length === 0) {
-    return <div className="session-empty">暂无会话，点击「新工作任务」开始</div>;
+    return <div className="session-empty">暂无会话，直接在下方输入任务即可开始</div>;
   }
 
   return (
