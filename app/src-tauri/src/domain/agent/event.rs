@@ -150,6 +150,13 @@ pub enum AgentEvent {
         /// 摘要
         summary: String,
     },
+    /// 自动续跑（单窗口轮次耗尽，注入提醒后继续执行）
+    RunContinued {
+        /// 会话 id
+        session_id: i64,
+        /// 第几次续跑（从 1 开始）
+        round: i64,
+    },
     /// 运行结束
     RunEnd {
         /// 会话 id

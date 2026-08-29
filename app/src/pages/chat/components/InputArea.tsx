@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Segmented, Select, Tag, Tooltip } from 'antd';
 import {
   ArrowUpOutlined,
+  LoadingOutlined,
   PlusOutlined,
   ReadOutlined,
   SafetyOutlined,
@@ -48,6 +49,26 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
     const f = activeId === null ? undefined : s.sessionRuns[activeId];
     return f === 'running' || f === 'waiting_approval';
   });
+  /** 当前会话运行开始时间（无则 undefined） */
+  const startedAt = useAgentStore((s) =>
+    activeId === null ? undefined : s.runStartedAt[activeId],
+  );
+
+  /* ---- 运行计时：每秒刷新，停止/卸载时清理 ---- */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!sessionBusy || startedAt === undefined) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [sessionBusy, startedAt]);
+
+  /** 已执行时长 mm:ss（不足 1 分钟如 0:07） */
+  const elapsed = (() => {
+    if (startedAt === undefined) return '0:00';
+    const sec = Math.max(0, Math.floor((now - startedAt) / 1000));
+    return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  })();
   /** 下拉显示值：会话级偏好 → 全局选中 → 默认模型 */
   const displayModel =
     (activeId !== null ? sessionModels[activeId] : undefined) ??
@@ -181,6 +202,11 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
             <SafetyOutlined /> 规则
           </button>
           <div style={{ flex: 1 }} />
+          {sessionBusy && startedAt !== undefined ? (
+            <span className="run-timer" title="已执行时长">
+              <LoadingOutlined /> {elapsed}
+            </span>
+          ) : null}
           <div className="ctx-meter" title="上下文窗口占用">
             <span className="ctx-label">上下文</span>
             <div className={`ctx-bar${ctxPercent >= 80 ? ' warn' : ''}`}>

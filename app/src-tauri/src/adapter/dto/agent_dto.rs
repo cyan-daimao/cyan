@@ -229,6 +229,13 @@ pub enum AgentEventDTO {
         /// 摘要
         summary: String,
     },
+    /// 自动续跑（前端展示「自动继续执行」提示）
+    RunContinued {
+        /// 会话 id
+        session_id: i64,
+        /// 第几次续跑（从 1 开始）
+        round: i64,
+    },
     /// 运行结束
     RunEnd {
         /// 会话 id
@@ -329,6 +336,7 @@ impl From<AgentEvent> for AgentEventDTO {
                 },
             },
             AgentEvent::Compacted { session_id, summary } => Self::Compacted { session_id, summary },
+            AgentEvent::RunContinued { session_id, round } => Self::RunContinued { session_id, round },
             AgentEvent::RunEnd {
                 session_id,
                 result,

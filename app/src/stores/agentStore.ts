@@ -42,6 +42,8 @@ interface AgentState {
   runSessionId: number | null;
   /** 全部会话的运行标记（跨项目并发运行，sessionId → 状态） */
   sessionRuns: Record<number, SessionRunFlag>;
+  /** 各会话运行开始时间（sessionId → Date.now()，内存态，运行结束清除） */
+  runStartedAt: Record<number, number>;
   todos: TodoDTO[];
   /** 本次会话的文件变更（含 diff 快照） */
   changes: ChangeView[];
@@ -78,6 +80,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   runState: 'idle',
   runSessionId: null,
   sessionRuns: {},
+  runStartedAt: {},
   todos: [],
   changes: [],
   ctxPercent: 0,
@@ -127,13 +130,21 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       runSessionId: sessionId,
       phase: 'thinking',
       sessionRuns: { ...get().sessionRuns, [sessionId]: 'running' },
+      runStartedAt: { ...get().runStartedAt, [sessionId]: Date.now() },
     });
     try {
       await sendTask(sessionId, trimmed, model, cfg.permMode, cfg.disabledTools, skipAppend);
       return true;
     } catch (e) {
       const { [sessionId]: _drop, ...rest } = get().sessionRuns;
-      set({ runState: 'idle', runSessionId: null, phase: null, sessionRuns: rest });
+      const { [sessionId]: _dropT, ...restStarted } = get().runStartedAt;
+      set({
+        runState: 'idle',
+        runSessionId: null,
+        phase: null,
+        sessionRuns: rest,
+        runStartedAt: restStarted,
+      });
       useSessionStore.getState().pushNode({
         id: newNodeId(),
         kind: 'system',
@@ -206,8 +217,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const ss = useSessionStore.getState();
     // 多会话并发：消息流与视图态只对「激活会话」生效；运行标记对所有会话生效
     const isActive = evt.sessionId === ss.activeId;
-    const mark = (flag: SessionRunFlag) =>
+    const mark = (flag: SessionRunFlag) => {
       set({ sessionRuns: { ...get().sessionRuns, [evt.sessionId]: flag } });
+      // 兜底记录开始时间（例如后端侧发起的运行）；已存在则不覆盖
+      if (flag === 'running' && get().runStartedAt[evt.sessionId] === undefined) {
+        set({ runStartedAt: { ...get().runStartedAt, [evt.sessionId]: Date.now() } });
+      }
+    };
     switch (evt.type) {
       case 'text_delta':
         if (!isActive) break;
@@ -315,8 +331,19 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           text: `🗜 上下文已自动压缩：${evt.summary}`,
         });
         break;
+      case 'run_continued':
+        if (!isActive) break;
+        ss.pushNode({
+          id: newNodeId(),
+          kind: 'system',
+          text: `⏳ 已执行 25 轮工具调用，任务未完成，自动继续执行（第 ${evt.round} 次续跑）`,
+        });
+        break;
       case 'run_end': {
         mark(evt.result === 'error' ? 'error' : 'done');
+        // 运行结束（done/aborted/error）清除计时
+        const { [evt.sessionId]: _dropT, ...restStarted } = get().runStartedAt;
+        set({ runStartedAt: restStarted });
         // 运行结束刷新会话列表（标题 / ctx / tokens 已变化）
         const project = useProjectStore.getState().current;
         if (project) {

@@ -2280,3 +2280,17 @@ pre {
 [data-theme='dark'] .market-card .mc-home:hover {
   color: var(--primary-hover);
 }
+
+/* ============ 会话运行计时指示 ============ */
+.run-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-timer .anticon {
+  color: var(--brand);
+}

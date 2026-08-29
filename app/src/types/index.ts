@@ -257,6 +257,8 @@ export type AgentEvent =
   | { type: 'change_add'; sessionId: number; change: ChangeDTO }
   | { type: 'ctx_update'; sessionId: number; ctxPercent: number; tokens: Tokens }
   | { type: 'compacted'; sessionId: number; summary: string }
+  /** 单窗口工具轮次跑满、任务未完成，自动续跑（round 从 1 开始） */
+  | { type: 'run_continued'; sessionId: number; round: number }
   | {
       type: 'run_end';
       sessionId: number;
