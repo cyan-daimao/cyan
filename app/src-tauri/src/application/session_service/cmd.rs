@@ -30,6 +30,15 @@ pub struct EditMessageCmd {
     pub text: String,
 }
 
+/// 设置会话级模型偏好命令
+#[derive(Debug, Clone)]
+pub struct SetSessionModelCmd {
+    /// 会话 id
+    pub session_id: i64,
+    /// 模型名（trim 后为空串 = 清除偏好，跟随全局）
+    pub model: String,
+}
+
 /// 追加消息命令（AgentService 内部复用）
 #[derive(Debug, Clone)]
 pub struct AppendMessageCmd {

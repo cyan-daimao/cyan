@@ -96,6 +96,8 @@ pub struct SessionBO {
     pub project_name: String,
     /// 所属项目路径（同上）
     pub project_path: String,
+    /// 会话级模型偏好（None = 跟随全局默认模型）
+    pub preferred_model: Option<String>,
     /// 创建时间
     pub created_at: NaiveDateTime,
     /// 更新时间
@@ -116,6 +118,7 @@ impl From<Session> for SessionBO {
             messages: s.messages.into_iter().map(MessageBO::from).collect(),
             project_name: String::new(),
             project_path: String::new(),
+            preferred_model: s.preferred_model,
             created_at: s.created_at,
             updated_at: s.updated_at,
             deleted_at: s.deleted_at,

@@ -26,7 +26,7 @@ pub use project_dto::{CreateProjectRequest, OpenProjectRequest, ProjectDTO, Remo
 pub use session_dto::{
     CreateSessionRequest, DeleteSessionRequest, GetSessionRequest, ListSessionRequest, MessageDTO,
     ProjectTokenUsageDTO, ProjectTokenUsageRequest, RestoreSessionRequest, EditMessageRequest,
-    SessionDTO, SessionSummaryDTO,
+    SessionDTO, SessionSummaryDTO, SetSessionModelRequest,
 };
 pub use skill_dto::{
     DeleteSkillRequest, InstallSkillFromGithubRequest, ListSkillRequest, SaveSkillRequest,

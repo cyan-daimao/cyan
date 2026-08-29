@@ -9,6 +9,7 @@ import type {
   SaveModelRequest,
 } from '../types';
 import * as configApi from '../services/config';
+import { setSessionModel as apiSetSessionModel } from '../services/session';
 import { errText, toast } from '../utils/feedback';
 
 const PERM_MODE_KEY = 'cyan.permMode';
@@ -58,6 +59,8 @@ interface ConfigState {
   permMode: PermMode;
   /** 输入区当前选中的模型名（send_task 按模型名传参） */
   activeModel: string | null;
+  /** 会话级模型偏好（内存态；sessionId → 模型名），优先级高于 activeModel */
+  sessionModels: Record<number, string>;
   /** 「能力」面板禁用的内置工具名（随 send_task 下发） */
   disabledTools: string[];
   /** 界面语言（antd locale 级别） */
@@ -72,6 +75,14 @@ interface ConfigState {
 
   setPermMode: (mode: PermMode) => void;
   setActiveModel: (name: string) => void;
+  /**
+   * 设置会话级模型偏好：调后端 set_session_model 后写本地；
+   * model 为空串则从 map 删除该键（清除偏好，跟随全局）。
+   * 由打开会话的路径用 preferredModel 播种时走 seedSessionModel（不调后端）。
+   */
+  setSessionModel: (sessionId: number, model: string) => Promise<boolean>;
+  /** 打开会话时用 SessionDTO.preferredModel 播种本地 map（纯内存，不调后端） */
+  seedSessionModel: (sessionId: number, model: string | null | undefined) => void;
   /** 切换内置工具启用状态 */
   setToolEnabled: (name: string, enabled: boolean) => void;
   setLang: (lang: Lang) => void;
@@ -115,6 +126,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   globalRules: [],
   permMode: loadPermMode(),
   activeModel: localStorage.getItem(ACTIVE_MODEL_KEY),
+  sessionModels: {},
   disabledTools: loadJson<string[]>(DISABLED_TOOLS_KEY, []),
   lang: loadJson<Lang>(LANG_KEY, 'zh'),
   themeColor: localStorage.getItem(THEME_COLOR_KEY) ?? THEME_COLORS[0].value,
@@ -131,6 +143,24 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   setActiveModel: (name) => {
     localStorage.setItem(ACTIVE_MODEL_KEY, name);
     set({ activeModel: name });
+  },
+
+  setSessionModel: async (sessionId, model) => {
+    try {
+      await apiSetSessionModel(sessionId, model);
+      get().seedSessionModel(sessionId, model || null);
+      return true;
+    } catch (e) {
+      toast.error(errText(e));
+      return false;
+    }
+  },
+
+  seedSessionModel: (sessionId, model) => {
+    const map = { ...get().sessionModels };
+    if (model) map[sessionId] = model;
+    else delete map[sessionId];
+    set({ sessionModels: map });
   },
 
   setToolEnabled: (name, enabled) => {

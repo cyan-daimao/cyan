@@ -109,7 +109,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       return false;
     }
     const cfg = useConfigStore.getState();
+    // 模型取值顺序：会话级偏好 → 全局选中 → 默认模型 → 第一个启用的（skipAppend 重发同序）
     const model =
+      cfg.sessionModels[sessionId] ??
       cfg.activeModel ??
       cfg.models.find((m) => m.isDefault && m.status === 'enabled')?.name ??
       cfg.models.find((m) => m.status === 'enabled')?.name;

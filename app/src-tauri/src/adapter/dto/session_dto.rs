@@ -108,6 +108,25 @@ impl From<EditMessageRequest> for crate::application::session_service::EditMessa
     }
 }
 
+/// set_session_model 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionModelRequest {
+    /// 会话 id
+    pub session_id: i64,
+    /// 模型名（空串 = 清除偏好，跟随全局）
+    pub model: String,
+}
+
+impl From<SetSessionModelRequest> for crate::application::session_service::SetSessionModelCmd {
+    fn from(r: SetSessionModelRequest) -> Self {
+        Self {
+            session_id: r.session_id,
+            model: r.model,
+        }
+    }
+}
+
 /// token 统计 DTO
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -255,6 +274,8 @@ pub struct SessionDTO {
     pub project_name: String,
     /// 所属项目路径（同上）
     pub project_path: String,
+    /// 会话级模型偏好（null = 跟随全局默认模型）
+    pub preferred_model: Option<String>,
     /// 创建时间
     pub created_at: String,
     /// 更新时间
@@ -277,6 +298,7 @@ impl From<SessionBO> for SessionDTO {
             messages: bo.messages.into_iter().map(MessageDTO::from).collect(),
             project_name: bo.project_name,
             project_path: bo.project_path,
+            preferred_model: bo.preferred_model,
             created_at: fmt_time(&bo.created_at),
             updated_at: fmt_time(&bo.updated_at),
             deleted_at: bo.deleted_at.as_ref().map(fmt_time),

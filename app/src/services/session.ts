@@ -15,6 +15,10 @@ export const createSession = (projectPath: string) =>
 export const deleteSession = (sessionId: number) =>
   call<void>('delete_session', { request: { sessionId } });
 
+/** 会话级模型偏好；model 传空串 = 清除偏好（跟随全局） */
+export const setSessionModel = (sessionId: number, model: string) =>
+  call<void>('set_session_model', { request: { sessionId, model } });
+
 export const projectTokenUsage = (projectPath: string) =>
   call<ProjectTokenUsageDTO>('project_token_usage', { request: { projectPath } });
 

@@ -24,6 +24,8 @@ pub struct Session {
     pub output_tokens: i64,
     /// 会话内消息（按 seq 升序）
     pub messages: Vec<Message>,
+    /// 会话级模型偏好（None = 跟随全局默认模型）
+    pub preferred_model: Option<String>,
     /// 创建时间
     pub created_at: NaiveDateTime,
     /// 更新时间
@@ -43,6 +45,7 @@ impl Session {
             input_tokens: 0,
             output_tokens: 0,
             messages: Vec::new(),
+            preferred_model: None,
             created_at: now,
             updated_at: now,
             deleted_at: None,

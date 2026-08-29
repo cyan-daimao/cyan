@@ -27,6 +27,8 @@ pub trait SessionRepository: Send + Sync {
     async fn list_deleted(&self) -> anyhow::Result<Vec<Session>>;
     /// 恢复软删会话（清 deleted_at，幂等）
     async fn restore(&self, id: i64) -> anyhow::Result<()>;
+    /// 设置会话级模型偏好（None = 清除，跟随全局；幂等）
+    async fn set_preferred_model(&self, id: i64, model: Option<&str>) -> anyhow::Result<()>;
 }
 
 /// 消息仓储

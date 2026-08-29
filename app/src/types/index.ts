@@ -88,6 +88,8 @@ export interface SessionDTO {
   projectName?: string;
   /** 所属项目路径（同上） */
   projectPath?: string;
+  /** 会话级模型偏好（null/缺省 = 跟随全局 activeModel） */
+  preferredModel?: string | null;
 }
 
 /** 前端渲染用消息节点（由 MessageDTO.payload / 事件流构造；id 为本地生成） */

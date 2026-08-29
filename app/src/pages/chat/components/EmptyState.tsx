@@ -7,6 +7,7 @@ import {
 } from '@ant-design/icons';
 import { useConfigStore } from '../../../stores/configStore';
 import { useProjectStore } from '../../../stores/projectStore';
+import { useSessionStore } from '../../../stores/sessionStore';
 import type { PermMode } from '../../../types';
 
 const PERM_LABEL: Record<PermMode, string> = { plan: '计划', ask: '询问', auto: '自动' };
@@ -28,6 +29,15 @@ export function EmptyState({ onPick }: EmptyStateProps) {
   const project = useProjectStore((s) => s.current);
   const permMode = useConfigStore((s) => s.permMode);
   const activeModel = useConfigStore((s) => s.activeModel);
+  const sessionModels = useConfigStore((s) => s.sessionModels);
+  const models = useConfigStore((s) => s.models);
+  const activeId = useSessionStore((s) => s.activeId);
+  // 与输入区下拉同序：会话级偏好 → 全局选中 → 默认模型
+  const displayModel =
+    (activeId !== null ? sessionModels[activeId] : undefined) ??
+    activeModel ??
+    models.find((m) => m.isDefault && m.status === 'enabled')?.name ??
+    null;
 
   return (
     <div className="empty-state">
@@ -43,7 +53,7 @@ export function EmptyState({ onPick }: EmptyStateProps) {
       <p className="env-line">
         当前项目：<b className="mono">{project?.path ?? '未打开（点击侧栏项目区 ＋ 打开）'}</b>
         <br />
-        权限模式：<b>{PERM_LABEL[permMode]}</b> · 模型：<b>{activeModel ?? '未配置'}</b>
+        权限模式：<b>{PERM_LABEL[permMode]}</b> · 模型：<b>{displayModel ?? '未配置'}</b>
       </p>
     </div>
   );

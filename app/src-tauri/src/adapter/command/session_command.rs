@@ -8,7 +8,7 @@ use tauri::State;
 use crate::adapter::dto::{
     CreateSessionRequest, DeleteSessionRequest, EditMessageRequest, GetSessionRequest,
     ListSessionRequest, ProjectTokenUsageDTO, ProjectTokenUsageRequest, RestoreSessionRequest,
-    SessionDTO, SessionSummaryDTO,
+    SessionDTO, SessionSummaryDTO, SetSessionModelRequest,
 };
 use crate::application::session_service::SessionService;
 use crate::error::ServiceError;
@@ -96,4 +96,13 @@ pub async fn edit_message(
 ) -> Result<SessionDTO, ServiceError> {
     let bo = svc.edit_message(request.into()).await?;
     Ok(SessionDTO::from(bo))
+}
+
+/// 设置会话级模型偏好（空串 = 清除跟随全局，幂等）
+#[tauri::command]
+pub async fn set_session_model(
+    svc: State<'_, Arc<dyn SessionService>>,
+    request: SetSessionModelRequest,
+) -> Result<(), ServiceError> {
+    svc.set_session_model(request.into()).await
 }

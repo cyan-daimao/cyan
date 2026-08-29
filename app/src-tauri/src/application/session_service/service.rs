@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::domain::config::ModelRepository;
 use crate::domain::project::ProjectRepository;
 use crate::domain::session::{
     Message, MessageKind, MessageRepository, RecycleBinRepository, Session, SessionRepository,
@@ -14,7 +15,7 @@ use crate::infra::db::now_local;
 use super::{
     AppendMessageCmd, CreateSessionCmd, DeleteSessionCmd, EditMessageCmd, GetSessionQuery,
     ListSessionQuery, MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, RestoreSessionCmd,
-    SessionBO, SessionSummaryBO,
+    SessionBO, SessionSummaryBO, SetSessionModelCmd,
 };
 
 /// 会话服务
@@ -43,6 +44,8 @@ pub trait SessionService: Send + Sync {
     async fn purge_recycle_bin(&self) -> Result<i64, ServiceError>;
     /// 编辑用户消息（编辑即截断：更新 payload 文本 + 物理删除后续消息），返回更新后的完整会话
     async fn edit_message(&self, cmd: EditMessageCmd) -> Result<SessionBO, ServiceError>;
+    /// 设置会话级模型偏好（空串 = 清除跟随全局；幂等）
+    async fn set_session_model(&self, cmd: SetSessionModelCmd) -> Result<(), ServiceError>;
 }
 
 /// 会话服务实现
@@ -51,6 +54,7 @@ pub struct SessionServiceImpl {
     message_repo: Arc<dyn MessageRepository>,
     project_repo: Arc<dyn ProjectRepository>,
     recycle_repo: Arc<dyn RecycleBinRepository>,
+    model_repo: Arc<dyn ModelRepository>,
 }
 
 impl SessionServiceImpl {
@@ -60,12 +64,14 @@ impl SessionServiceImpl {
         message_repo: Arc<dyn MessageRepository>,
         project_repo: Arc<dyn ProjectRepository>,
         recycle_repo: Arc<dyn RecycleBinRepository>,
+        model_repo: Arc<dyn ModelRepository>,
     ) -> Self {
         Self {
             session_repo,
             message_repo,
             project_repo,
             recycle_repo,
+            model_repo,
         }
     }
 
@@ -203,11 +209,34 @@ impl SessionService for SessionServiceImpl {
         let session = self.load_with_messages(msg.session_id).await?;
         Ok(SessionBO::from(session))
     }
+
+    async fn set_session_model(&self, cmd: SetSessionModelCmd) -> Result<(), ServiceError> {
+        // 会话不存在 → not_found
+        self.session_repo
+            .find_by_id(cmd.session_id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found(format!("会话不存在：{}", cmd.session_id)))?;
+        let model = cmd.model.trim();
+        let preference = if model.is_empty() {
+            None // 空串 = 清除偏好（跟随全局）
+        } else {
+            // 校验模型配置存在（不限启用状态）
+            if self.model_repo.find_by_name(model).await?.is_none() {
+                return Err(ServiceError::validation(format!("模型配置不存在：{model}")));
+            }
+            Some(model)
+        };
+        self.session_repo
+            .set_preferred_model(cmd.session_id, preference)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::db::model_repo::ModelRepositoryImpl;
     use crate::infra::db::project_repo::ProjectRepositoryImpl;
     use crate::infra::db::recycle::RecycleBinRepositoryImpl;
     use crate::infra::db::session_repo::{MessageRepositoryImpl, SessionRepositoryImpl};
@@ -219,6 +248,7 @@ mod tests {
             Arc::new(MessageRepositoryImpl::new(pool.clone())),
             Arc::new(ProjectRepositoryImpl::new(pool.clone())),
             Arc::new(RecycleBinRepositoryImpl::new(pool.clone())),
+            Arc::new(ModelRepositoryImpl::new(pool.clone())),
         )
     }
 
@@ -330,5 +360,68 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code, 1001);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn set_session_model_roundtrip(pool: SqlitePool) {
+        let svc = svc(&pool);
+        let (sid, _) = seed_session_with_messages(&pool).await;
+        // 种子模型配置（disabled 状态也允许设为偏好）
+        sqlx::query(
+            "INSERT INTO cyan_model_config (name, provider, base_url, api_key, context_window, status, created_by, updated_by, created_at, updated_at)
+             VALUES ('kimi', 'moonshot', 'https://api.x.dev', 'keychain://cyan/model/kimi', 128000, 'disabled', 'local', 'local', '2026-08-27 10:00:00', '2026-08-27 10:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // 设置 → get_session 带回
+        svc.set_session_model(SetSessionModelCmd {
+            session_id: sid,
+            model: "kimi".into(),
+        })
+        .await
+        .unwrap();
+        let bo = svc.get_session(GetSessionQuery { session_id: sid }).await.unwrap();
+        assert_eq!(bo.preferred_model.as_deref(), Some("kimi"));
+
+        // 幂等：重复设置同值
+        svc.set_session_model(SetSessionModelCmd {
+            session_id: sid,
+            model: "kimi".into(),
+        })
+        .await
+        .unwrap();
+
+        // 清空（trim 后空串）→ 跟随全局
+        svc.set_session_model(SetSessionModelCmd {
+            session_id: sid,
+            model: "  ".into(),
+        })
+        .await
+        .unwrap();
+        let bo = svc.get_session(GetSessionQuery { session_id: sid }).await.unwrap();
+        assert_eq!(bo.preferred_model, None);
+
+        // 不存在的模型 → validation
+        let err = svc
+            .set_session_model(SetSessionModelCmd {
+                session_id: sid,
+                model: "ghost".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, 1001);
+        assert!(err.message.contains("模型配置不存在：ghost"));
+
+        // 不存在的会话 → not_found
+        let err = svc
+            .set_session_model(SetSessionModelCmd {
+                session_id: 9999,
+                model: "kimi".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, 2002);
     }
 }

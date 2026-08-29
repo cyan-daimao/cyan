@@ -22,6 +22,8 @@ pub struct SessionDO {
     pub input_tokens: i64,
     /// 累计输出 token
     pub output_tokens: i64,
+    /// 会话级模型偏好（NULL = 跟随全局）
+    pub preferred_model: Option<String>,
     /// 创建人
     pub created_by: String,
     /// 更新人
@@ -46,6 +48,7 @@ impl TryFrom<SessionDO> for Session {
             input_tokens: d.input_tokens,
             output_tokens: d.output_tokens,
             messages: Vec::new(),
+            preferred_model: d.preferred_model,
             created_at: parse_time(&d.created_at)?,
             updated_at: parse_time(&d.updated_at)?,
             deleted_at: d.deleted_at.as_deref().map(parse_time).transpose()?,
@@ -110,7 +113,7 @@ impl SessionRepositoryImpl {
 impl SessionRepository for SessionRepositoryImpl {
     async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<Session>> {
         let row = sqlx::query_as::<_, SessionDO>(
-            "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens,
+            "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
                     created_by, updated_by, created_at, updated_at, deleted_at
              FROM cyan_session WHERE id = ? AND deleted_at IS NULL",
         )
@@ -128,7 +131,7 @@ impl SessionRepository for SessionRepositoryImpl {
         let rows = match keyword {
             Some(kw) if !kw.trim().is_empty() => {
                 sqlx::query_as::<_, SessionDO>(
-                    "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens,
+                    "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
                             created_by, updated_by, created_at, updated_at, deleted_at
                      FROM cyan_session
                      WHERE project_id = ? AND deleted_at IS NULL AND title LIKE ?
@@ -141,7 +144,7 @@ impl SessionRepository for SessionRepositoryImpl {
             }
             _ => {
                 sqlx::query_as::<_, SessionDO>(
-                    "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens,
+                    "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
                             created_by, updated_by, created_at, updated_at, deleted_at
                      FROM cyan_session
                      WHERE project_id = ? AND deleted_at IS NULL
@@ -161,15 +164,16 @@ impl SessionRepository for SessionRepositoryImpl {
         session.updated_at = now;
         let id = sqlx::query(
             "INSERT INTO cyan_session
-                (project_id, title, ctx_percent, input_tokens, output_tokens,
+                (project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
                  created_by, updated_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'local', 'local', ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, 'local', 'local', ?, ?)",
         )
         .bind(session.project_id)
         .bind(&session.title)
         .bind(session.ctx_percent)
         .bind(session.input_tokens)
         .bind(session.output_tokens)
+        .bind(&session.preferred_model)
         .bind(fmt_time(&now))
         .bind(fmt_time(&now))
         .execute(&self.pool)
@@ -182,7 +186,7 @@ impl SessionRepository for SessionRepositoryImpl {
     async fn update(&self, session: &Session) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE cyan_session
-             SET title = ?, ctx_percent = ?, input_tokens = ?, output_tokens = ?,
+             SET title = ?, ctx_percent = ?, input_tokens = ?, output_tokens = ?, preferred_model = ?,
                  updated_by = 'local', updated_at = ?
              WHERE id = ? AND deleted_at IS NULL",
         )
@@ -190,6 +194,7 @@ impl SessionRepository for SessionRepositoryImpl {
         .bind(session.ctx_percent)
         .bind(session.input_tokens)
         .bind(session.output_tokens)
+        .bind(&session.preferred_model)
         .bind(fmt_time(&now_local()))
         .bind(session.id)
         .execute(&self.pool)
@@ -223,7 +228,7 @@ impl SessionRepository for SessionRepositoryImpl {
 
     async fn list_deleted(&self) -> anyhow::Result<Vec<Session>> {
         let rows = sqlx::query_as::<_, SessionDO>(
-            "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens,
+            "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
                     created_by, updated_by, created_at, updated_at, deleted_at
              FROM cyan_session WHERE deleted_at IS NOT NULL
              ORDER BY deleted_at DESC",
@@ -238,6 +243,19 @@ impl SessionRepository for SessionRepositoryImpl {
             "UPDATE cyan_session SET deleted_at = NULL, updated_by = 'local', updated_at = ?
              WHERE id = ? AND deleted_at IS NOT NULL",
         )
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn set_preferred_model(&self, id: i64, model: Option<&str>) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_session SET preferred_model = ?, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(model)
         .bind(fmt_time(&now_local()))
         .bind(id)
         .execute(&self.pool)
@@ -438,5 +456,35 @@ mod tests {
 
         msg_repo.soft_delete_by_session(s.id).await.unwrap();
         assert!(msg_repo.list_by_session(s.id).await.unwrap().is_empty());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn preferred_model_roundtrip(pool: SqlitePool) {
+        let project_id = seed_project(&pool).await;
+        let repo = SessionRepositoryImpl::new(pool.clone());
+
+        // 插入默认 None
+        let mut s = Session::new(project_id, now_local());
+        repo.insert(&mut s).await.unwrap();
+        assert_eq!(repo.find_by_id(s.id).await.unwrap().unwrap().preferred_model, None);
+
+        // set_preferred_model 写入与读取
+        repo.set_preferred_model(s.id, Some("kimi")).await.unwrap();
+        assert_eq!(
+            repo.find_by_id(s.id).await.unwrap().unwrap().preferred_model.as_deref(),
+            Some("kimi")
+        );
+
+        // update 整行也携带该列（不清空已设置的偏好）
+        let mut s2 = repo.find_by_id(s.id).await.unwrap().unwrap();
+        s2.title = "改标题".into();
+        repo.update(&s2).await.unwrap();
+        let loaded = repo.find_by_id(s.id).await.unwrap().unwrap();
+        assert_eq!(loaded.title, "改标题");
+        assert_eq!(loaded.preferred_model.as_deref(), Some("kimi"));
+
+        // 清除 → None
+        repo.set_preferred_model(s.id, None).await.unwrap();
+        assert_eq!(repo.find_by_id(s.id).await.unwrap().unwrap().preferred_model, None);
     }
 }

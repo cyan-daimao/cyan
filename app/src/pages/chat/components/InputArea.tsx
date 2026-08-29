@@ -1,6 +1,6 @@
 import type { KeyboardEvent, RefObject } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Segmented, Select, Tag } from 'antd';
+import { Segmented, Select, Tag, Tooltip } from 'antd';
 import {
   ArrowUpOutlined,
   PlusOutlined,
@@ -37,10 +37,23 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
   const models = useConfigStore((s) => s.models);
   const activeModel = useConfigStore((s) => s.activeModel);
   const setActiveModel = useConfigStore((s) => s.setActiveModel);
+  const sessionModels = useConfigStore((s) => s.sessionModels);
+  const setSessionModel = useConfigStore((s) => s.setSessionModel);
 
   const running = runState === 'running' || runState === 'waiting_approval';
   const enabledModels = models.filter((m) => m.status === 'enabled');
   const activeId = useSessionStore((s) => s.activeId);
+  /** 当前会话运行中（含等待审批）：模型下拉禁用 */
+  const sessionBusy = useAgentStore((s) => {
+    const f = activeId === null ? undefined : s.sessionRuns[activeId];
+    return f === 'running' || f === 'waiting_approval';
+  });
+  /** 下拉显示值：会话级偏好 → 全局选中 → 默认模型 */
+  const displayModel =
+    (activeId !== null ? sessionModels[activeId] : undefined) ??
+    activeModel ??
+    models.find((m) => m.isDefault && m.status === 'enabled')?.name ??
+    null;
   const [permsOpen, setPermsOpen] = useState(false);
 
   /* ---- `/` 技能补全（PLUGIN_DESIGN 2.3） ---- */
@@ -229,22 +242,31 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
                 <span>↓ {fmtTokens(tokens.output)}</span>
               </span>
             ) : null}
-            <Select
-              value={activeModel}
-              placeholder="选择模型"
-              variant="borderless"
-              size="small"
-              style={{ minWidth: 140 }}
-              disabled={running || enabledModels.length === 0}
-              onChange={(v: string) => {
-                setActiveModel(v);
-                toast.info(`已切换模型：${v}`);
-              }}
-              options={enabledModels.map((m) => ({
-                value: m.name,
-                label: `${m.name}${m.isDefault ? ' · 默认' : ''}`,
-              }))}
-            />
+            <Tooltip title={sessionBusy || running ? '运行中不可切换模型' : undefined}>
+              <Select
+                value={displayModel}
+                placeholder="选择模型"
+                variant="borderless"
+                size="small"
+                style={{ minWidth: 140 }}
+                disabled={running || sessionBusy || enabledModels.length === 0}
+                onChange={(v: string) => {
+                  // 有激活会话 → 写会话级偏好；空会话 → 维持原逻辑写全局
+                  if (activeId !== null) {
+                    void setSessionModel(activeId, v).then((ok) => {
+                      if (ok) toast.info(`当前会话模型：${v}`);
+                    });
+                  } else {
+                    setActiveModel(v);
+                    toast.info(`已切换模型：${v}`);
+                  }
+                }}
+                options={enabledModels.map((m) => ({
+                  value: m.name,
+                  label: `${m.name}${m.isDefault ? ' · 默认' : ''}`,
+                }))}
+              />
+            </Tooltip>
             <button
               className={`send-btn${running ? ' stop' : ''}`}
               title={running ? '停止' : '发送'}

@@ -9,6 +9,7 @@ import type {
 } from '../types';
 import * as sessionApi from '../services/session';
 import { errText, toast } from '../utils/feedback';
+import { useConfigStore } from './configStore';
 
 /** 消息节点本地 id 生成（仅前端渲染用，与后端消息 id 无关） */
 let nodeSeq = 0;
@@ -176,6 +177,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         .map(dtoToNode)
         .filter((n): n is ChatNode => n !== null);
       set({ activeId: sessionId, messages });
+      // 播种会话级模型偏好（null 则清除该键，跟随全局）
+      useConfigStore.getState().seedSessionModel(dto.id, dto.preferredModel);
       return dto;
     } catch (e) {
       toast.error(`打开会话失败：${errText(e)}`);
@@ -190,6 +193,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const dto = await sessionApi.createSession(projectPath);
       set({ activeId: dto.id, messages: [] });
+      // 新会话无偏好，确保本地 map 无残留
+      useConfigStore.getState().seedSessionModel(dto.id, dto.preferredModel ?? null);
       await get().loadSessions(projectPath, get().searchKw || undefined);
       return dto.id;
     } catch (e) {
@@ -320,6 +325,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       activeId: dto.id,
       messages: dto.messages.map(dtoToNode).filter((n): n is ChatNode => n !== null),
     });
+    // 编辑消息后同步会话级模型偏好
+    useConfigStore.getState().seedSessionModel(dto.id, dto.preferredModel);
   },
 
   resolveMessageId: async (nodeId) => {
