@@ -18,40 +18,8 @@ use crate::domain::shared::ProjectPath;
 use crate::infra::db::now_local;
 use crate::infra::mcp::{self, McpGateway};
 
-/// 单窗口最大工具轮次（跑满未完成则自动续跑）
+/// 续跑窗口大小（每 25 轮注入一次续跑提醒；无总轮次上限，cancel 与 ctx≥90% 自动压缩是仅有的安全阀）
 const MAX_ITERS: usize = 25;
-
-/// 最大自动续跑次数（总轮次约 MAX_ITERS × (1 + MAX_CONTINUATIONS) = 200）
-const MAX_CONTINUATIONS: usize = 7;
-
-/// 轮次预算：单窗口跑满后可续跑，续跑耗尽才硬错误
-struct IterBudget {
-    /// 当前窗口已消耗轮次
-    iter: usize,
-    /// 已续跑次数
-    continuations: usize,
-}
-
-impl IterBudget {
-    /// 消耗一轮；false = 当前窗口已满（调用方走续跑判定）
-    fn consume(&mut self) -> bool {
-        if self.iter >= MAX_ITERS {
-            return false;
-        }
-        self.iter += 1;
-        true
-    }
-
-    /// 窗口耗尽时尝试续跑：Some(第几次续跑) 重置计数继续；None 总兜底已到
-    fn continue_or_stop(&mut self) -> Option<i64> {
-        if self.continuations >= MAX_CONTINUATIONS {
-            return None;
-        }
-        self.continuations += 1;
-        self.iter = 0;
-        Some(self.continuations as i64)
-    }
-}
 
 /// 续跑提醒消息（注入 LLM 上下文，不落库；纯函数便于测试）
 fn continuation_prompt(max_iters: usize) -> String {
@@ -514,26 +482,27 @@ pub async fn run_loop(
     let mut total_usage = TokenUsage::default();
     let mut result = RunResult::Done;
     let mut completed = false;
-    // 轮次预算：单窗口 MAX_ITERS 轮，跑满未完成自动续跑（最多 MAX_CONTINUATIONS 次）
-    let mut budget = IterBudget {
-        iter: 0,
-        continuations: 0,
-    };
+    // 续跑计数：每 MAX_ITERS 轮注入一次提醒并无限续跑（无总轮次上限）
+    let mut iter = 0usize;
+    let mut continuations = 0i64;
 
     'outer: loop {
-        if !budget.consume() {
-            // 窗口耗尽且未完成：续跑（注入提醒 + 用户可见提示 + 事件）；续跑耗尽才硬错误
-            let Some(round) = budget.continue_or_stop() else {
-                break 'outer;
-            };
+        if iter >= MAX_ITERS {
+            // 窗口耗尽且未完成：注入提醒 + 用户可见提示 + 事件，无限续跑直到 completed 或 cancel
+            continuations += 1;
+            iter = 0;
             // 提醒消息只进 LLM 上下文，不落库
             llm_messages.push(ChatMessage::text(ChatRole::User, continuation_prompt(MAX_ITERS)));
             // 用户可见的系统提示消息 + RunContinued 事件
-            let note = continuation_note(MAX_ITERS, round);
+            let note = continuation_note(MAX_ITERS, continuations);
             persist_message(&ctx, &mut session, MessageKind::System, Message::text_payload(&note)).await;
-            ctx.sink.emit(AgentEvent::RunContinued { session_id, round });
+            ctx.sink.emit(AgentEvent::RunContinued {
+                session_id,
+                round: continuations,
+            });
             continue 'outer;
         }
+        iter += 1;
         if cancel.is_cancelled() {
             result = RunResult::Aborted;
             completed = true;
@@ -922,12 +891,8 @@ pub async fn run_loop(
         }
     }
 
-    if !completed {
-        result = RunResult::Error(format!(
-            "超过最大工具轮次上限（约 {} 轮），任务中止",
-            MAX_ITERS * (MAX_CONTINUATIONS + 1)
-        ));
-    }
+    // 循环只经 completed=true 的分支退出（done/aborted/error 已在循环内赋值）
+    debug_assert!(completed);
     run.finish();
     ctx.sink.emit(AgentEvent::RunEnd {
         session_id,
@@ -1256,17 +1221,18 @@ mod tests {
             .any(|e| matches!(e, AgentEvent::RunEnd { result: RunResult::Done, .. })));
     }
 
-    // ---- 自动续跑：窗口跑满注入提醒继续，续跑耗尽才硬错误 ----
+    // ---- 自动续跑：每 25 轮注入提醒，无轮次上限跑到完成 ----
 
-    /// 永远返回同一工具调用的 LLM（任务永不完成），记录调用次数与是否见到续跑提醒
-    #[derive(Default)]
-    struct LoopForeverLlm {
+    /// 前 N 次调用返回工具调用、之后返回纯文本完成的 LLM（验证无轮次上限的持续续跑）
+    struct FiniteToolCallLlm {
+        /// 返回工具调用的轮数（之后完成）
+        tool_call_rounds: usize,
         calls: AtomicUsize,
         saw_continuation: std::sync::atomic::AtomicBool,
     }
 
     #[async_trait::async_trait]
-    impl LlmGateway for LoopForeverLlm {
+    impl LlmGateway for FiniteToolCallLlm {
         async fn stream_chat(
             &self,
             req: &crate::domain::agent::ChatRequest,
@@ -1274,7 +1240,7 @@ mod tests {
             _on_thinking: &mut (dyn FnMut(String) + Send + '_),
             _cancel: CancellationToken,
         ) -> Result<AssistantTurn, LlmError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
             if req
                 .messages
                 .iter()
@@ -1283,20 +1249,32 @@ mod tests {
                 self.saw_continuation
                     .store(true, Ordering::SeqCst);
             }
-            Ok(AssistantTurn {
-                tool_calls: vec![ChatToolCall {
-                    id: "c1".into(),
-                    name: "Read".into(),
-                    arguments: "{\"path\":\"nope.txt\"}".into(),
-                }],
-                ..Default::default()
-            })
+            if n < self.tool_call_rounds {
+                Ok(AssistantTurn {
+                    tool_calls: vec![ChatToolCall {
+                        id: "c1".into(),
+                        name: "Read".into(),
+                        arguments: "{\"path\":\"nope.txt\"}".into(),
+                    }],
+                    ..Default::default()
+                })
+            } else {
+                Ok(AssistantTurn {
+                    text: "任务完成".into(),
+                    ..Default::default()
+                })
+            }
         }
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn run_loop_continues_after_window_then_errors(pool: SqlitePool) {
-        let llm = Arc::new(LoopForeverLlm::default());
+    async fn run_loop_continues_unbounded_until_done(pool: SqlitePool) {
+        // 前 100 轮都返回工具调用（跨 4 个 25 轮窗口），第 101 轮完成
+        let llm = Arc::new(FiniteToolCallLlm {
+            tool_call_rounds: 100,
+            calls: AtomicUsize::new(0),
+            saw_continuation: std::sync::atomic::AtomicBool::new(false),
+        });
         let sink = Arc::new(RecordingSink::default());
         let mcp: Arc<dyn McpGateway> = Arc::new(MockMcpGateway {
             tools: vec![],
@@ -1310,11 +1288,11 @@ mod tests {
         let model = ModelConfig::new("m".into(), "p".into(), "https://x.dev".into(), 128_000, now_local());
         run_loop(ctx, run, session, root, model, "sk".into(), vec![], PermMode::Auto, vec![]).await;
 
-        // 总轮次 = 25 × (1 + 7) = 200（续跑 7 次后才兜底）
-        assert_eq!(llm.calls.load(Ordering::SeqCst), 200);
+        // 无轮次上限：101 次调用后正常完成（不再出现「超过最大工具轮次」错误）
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 101);
         // 续跑提醒已注入 LLM 上下文
         assert!(llm.saw_continuation.load(Ordering::SeqCst));
-        // 7 次 RunContinued 事件，round 1..=7（先取出事件再 await，避免持锁跨 await）
+        // 4 次 RunContinued（100 轮跨 4 个窗口），round 递增（先取出事件再 await，避免持锁跨 await）
         let events: Vec<AgentEvent> = sink.events.lock().unwrap().clone();
         let rounds: Vec<i64> = events
             .iter()
@@ -1323,8 +1301,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(rounds, vec![1, 2, 3, 4, 5, 6, 7]);
-        // 最终 run_end 为错误兜底（约 200 轮）
+        assert_eq!(rounds, vec![1, 2, 3, 4]);
+        // 最终 run_end 为 done，无任何轮次上限错误
         let run_end = events
             .iter()
             .find_map(|e| match e {
@@ -1332,11 +1310,8 @@ mod tests {
                 _ => None,
             })
             .expect("应有 run_end");
-        match run_end {
-            RunResult::Error(m) => assert!(m.contains("约 200 轮"), "错误文案应包含约 200 轮：{m}"),
-            other => panic!("续跑耗尽后应为 Error，实际 {other:?}"),
-        }
-        // 用户可见系统提示消息落库 7 条
+        assert!(matches!(run_end, RunResult::Done), "无限续跑应跑到 done，实际 {run_end:?}");
+        // 用户可见系统提示消息落库 4 条
         let msg_repo = MessageRepositoryImpl::new(pool.clone());
         let msgs = msg_repo.list_by_session(session_id).await.unwrap();
         let notes = msgs
@@ -1346,30 +1321,7 @@ mod tests {
                     && m.text().map(|t| t.contains("自动继续执行")).unwrap_or(false)
             })
             .count();
-        assert_eq!(notes, 7);
-    }
-
-    #[test]
-    fn iter_budget_continues_then_stops() {
-        let mut b = IterBudget {
-            iter: 0,
-            continuations: 0,
-        };
-        // 第一窗口 25 轮
-        for _ in 0..MAX_ITERS {
-            assert!(b.consume());
-        }
-        assert!(!b.consume(), "窗口已满");
-        // 可续跑 7 次
-        for round in 1..=MAX_CONTINUATIONS {
-            assert_eq!(b.continue_or_stop(), Some(round as i64));
-            for _ in 0..MAX_ITERS {
-                assert!(b.consume());
-            }
-            assert!(!b.consume());
-        }
-        // 续跑耗尽
-        assert_eq!(b.continue_or_stop(), None);
+        assert_eq!(notes, 4);
     }
 
     #[test]
