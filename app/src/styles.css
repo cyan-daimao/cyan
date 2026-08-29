@@ -2150,3 +2150,104 @@ pre {
   border-color: var(--border-light);
   box-shadow: none;
 }
+
+/* ============ 消息行内编辑（编辑即截断重发） ============ */
+.msg-editable {
+  position: relative;
+}
+
+.msg-editable-user {
+  align-self: flex-end;
+  max-width: 78%;
+}
+
+.msg-editable-user .msg-user {
+  align-self: stretch;
+  max-width: none;
+}
+
+.msg-edit-btn {
+  position: absolute;
+  top: 2px;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.msg-editable:hover .msg-edit-btn {
+  opacity: 1;
+}
+
+.msg-edit-btn:hover {
+  color: var(--brand);
+}
+
+/* 用户气泡：按钮在气泡左侧 */
+.msg-editable-user .msg-edit-btn {
+  right: calc(100% + 6px);
+}
+
+/* 助手消息：按钮在行右上角 */
+.msg-editable-assistant .msg-edit-btn {
+  right: 0;
+}
+
+.msg-edit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.msg-edit-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  font-size: 14px;
+  line-height: 1.6;
+  font-family: inherit;
+  color: inherit;
+  background: transparent;
+}
+
+/* 助手编辑态：给一个浅色输入底以区分 */
+.msg-editable-assistant .msg-edit-input,
+.msg-assistant .msg-edit-input {
+  background: var(--bg-side);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--text);
+}
+
+.msg-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 用户气泡编辑态：气泡加宽些 */
+.msg-user.msg-editing {
+  min-width: 280px;
+}
+
+/* ---- 深色 ---- */
+[data-theme='dark'] .msg-edit-btn {
+  background: var(--bg-elev);
+  border-color: var(--border);
+}
+
+[data-theme='dark'] .msg-assistant .msg-edit-input {
+  background: #14161a;
+}

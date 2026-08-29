@@ -19,6 +19,9 @@ pub struct SendTaskRequest {
     pub perm_mode: String,
     /// 禁用的内置工具名（前端「能力」面板配置）
     pub disabled_tools: Option<Vec<String>>,
+    /// 跳过用户消息追加（编辑后重新生成场景）
+    #[serde(default)]
+    pub skip_append: bool,
 }
 
 impl From<SendTaskRequest> for StartRunCmd {
@@ -29,6 +32,7 @@ impl From<SendTaskRequest> for StartRunCmd {
             model: r.model,
             perm_mode: r.perm_mode,
             disabled_tools: r.disabled_tools.unwrap_or_default(),
+            skip_append: r.skip_append,
         }
     }
 }

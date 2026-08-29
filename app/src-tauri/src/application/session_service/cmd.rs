@@ -21,6 +21,15 @@ pub struct RestoreSessionCmd {
     pub id: i64,
 }
 
+/// 编辑消息命令（编辑即截断：更新文本 + 物理删除后续消息）
+#[derive(Debug, Clone)]
+pub struct EditMessageCmd {
+    /// 消息 id
+    pub id: i64,
+    /// 新文本
+    pub text: String,
+}
+
 /// 追加消息命令（AgentService 内部复用）
 #[derive(Debug, Clone)]
 pub struct AppendMessageCmd {

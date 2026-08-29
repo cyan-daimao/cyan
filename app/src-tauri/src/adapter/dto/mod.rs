@@ -25,8 +25,8 @@ pub use plugin_dto::{
 pub use project_dto::{CreateProjectRequest, OpenProjectRequest, ProjectDTO, RemoveProjectRequest};
 pub use session_dto::{
     CreateSessionRequest, DeleteSessionRequest, GetSessionRequest, ListSessionRequest, MessageDTO,
-    ProjectTokenUsageDTO, ProjectTokenUsageRequest, RestoreSessionRequest, SessionDTO,
-    SessionSummaryDTO,
+    ProjectTokenUsageDTO, ProjectTokenUsageRequest, RestoreSessionRequest, EditMessageRequest,
+    SessionDTO, SessionSummaryDTO,
 };
 pub use skill_dto::{
     DeleteSkillRequest, InstallSkillFromGithubRequest, ListSkillRequest, SaveSkillRequest,

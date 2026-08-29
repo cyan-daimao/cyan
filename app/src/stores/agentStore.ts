@@ -52,8 +52,9 @@ interface AgentState {
   /** 当前运行阶段（驱动「正在思考」loading 气泡） */
   phase: AgentPhase;
 
-  /** 发送任务；返回是否已被受理（受理后输入框可清空） */
-  send: (text: string) => Promise<boolean>;
+  /** 发送任务；返回是否已被受理（受理后输入框可清空）。
+   *  opts.skipAppend：编辑即截断重发场景，后端不再 append 用户消息，前端也不重复插入气泡 */
+  send: (text: string, opts?: { skipAppend?: boolean }) => Promise<boolean>;
   /** 中断当前运行（Esc / 停止键） */
   interrupt: () => Promise<void>;
   /** 审批决断（允许一次 / 总是允许 / 拒绝）；alwaysScope 为「总是允许」的规则作用域 */
@@ -84,8 +85,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   pendingApproval: null,
   phase: null,
 
-  send: async (text) => {
+  send: async (text, opts) => {
     const trimmed = text.trim();
+    const skipAppend = opts?.skipAppend === true;
     if (!trimmed) {
       toast.warning('请输入任务描述');
       return false;
@@ -115,7 +117,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       toast.warning('请先在「设置 - 模型配置」中添加并启用模型');
       return false;
     }
-    useSessionStore.getState().pushNode({ id: newNodeId(), kind: 'user', text: trimmed });
+    if (!skipAppend) {
+      useSessionStore.getState().pushNode({ id: newNodeId(), kind: 'user', text: trimmed });
+    }
     set({
       runState: 'running',
       runSessionId: sessionId,
@@ -123,7 +127,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       sessionRuns: { ...get().sessionRuns, [sessionId]: 'running' },
     });
     try {
-      await sendTask(sessionId, trimmed, model, cfg.permMode, cfg.disabledTools);
+      await sendTask(sessionId, trimmed, model, cfg.permMode, cfg.disabledTools, skipAppend);
       return true;
     } catch (e) {
       const { [sessionId]: _drop, ...rest } = get().sessionRuns;

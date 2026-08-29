@@ -30,3 +30,10 @@ export const restoreSession = (id: number) =>
 
 /** 清空回收站（硬删），返回清理行数 */
 export const purgeRecycleBin = () => call<number>('purge_recycle_bin');
+
+/**
+ * 行内编辑消息：更新 payload 文本 + 物理删除其后所有消息，返回完整会话。
+ * （编辑即截断重发语义）
+ */
+export const editMessage = (id: number, text: string) =>
+  call<SessionDTO>('edit_message', { request: { id, text } });

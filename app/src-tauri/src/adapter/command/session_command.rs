@@ -6,9 +6,9 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::adapter::dto::{
-    CreateSessionRequest, DeleteSessionRequest, GetSessionRequest, ListSessionRequest,
-    ProjectTokenUsageDTO, ProjectTokenUsageRequest, RestoreSessionRequest, SessionDTO,
-    SessionSummaryDTO,
+    CreateSessionRequest, DeleteSessionRequest, EditMessageRequest, GetSessionRequest,
+    ListSessionRequest, ProjectTokenUsageDTO, ProjectTokenUsageRequest, RestoreSessionRequest,
+    SessionDTO, SessionSummaryDTO,
 };
 use crate::application::session_service::SessionService;
 use crate::error::ServiceError;
@@ -86,4 +86,14 @@ pub async fn purge_recycle_bin(
     svc: State<'_, Arc<dyn SessionService>>,
 ) -> Result<i64, ServiceError> {
     svc.purge_recycle_bin().await
+}
+
+/// 编辑消息（编辑即截断重发），返回更新+截断后的完整会话
+#[tauri::command]
+pub async fn edit_message(
+    svc: State<'_, Arc<dyn SessionService>>,
+    request: EditMessageRequest,
+) -> Result<SessionDTO, ServiceError> {
+    let bo = svc.edit_message(request.into()).await?;
+    Ok(SessionDTO::from(bo))
 }

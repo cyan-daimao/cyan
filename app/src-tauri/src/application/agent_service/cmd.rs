@@ -13,6 +13,8 @@ pub struct StartRunCmd {
     pub perm_mode: String,
     /// 本次运行禁用的内置工具名（前端「能力」面板配置）
     pub disabled_tools: Vec<String>,
+    /// 跳过用户消息追加（编辑后重新生成场景：最后一条 user 消息已存在）
+    pub skip_append: bool,
 }
 
 /// 中断当前运行命令

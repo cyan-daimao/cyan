@@ -155,6 +155,8 @@ pub fn run() {
             session_command::list_deleted_sessions,
             session_command::restore_session,
             session_command::purge_recycle_bin,
+            // 消息编辑
+            session_command::edit_message,
             // Agent
             agent_command::send_task,
             agent_command::interrupt_run,

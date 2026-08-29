@@ -12,9 +12,9 @@ use crate::error::ServiceError;
 use crate::infra::db::now_local;
 
 use super::{
-    AppendMessageCmd, CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery,
-    MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, RestoreSessionCmd, SessionBO,
-    SessionSummaryBO,
+    AppendMessageCmd, CreateSessionCmd, DeleteSessionCmd, EditMessageCmd, GetSessionQuery,
+    ListSessionQuery, MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, RestoreSessionCmd,
+    SessionBO, SessionSummaryBO,
 };
 
 /// 会话服务
@@ -41,6 +41,8 @@ pub trait SessionService: Send + Sync {
     async fn restore_session(&self, cmd: RestoreSessionCmd) -> Result<(), ServiceError>;
     /// 清空回收站：全库软删记录硬删，返回总删除行数
     async fn purge_recycle_bin(&self) -> Result<i64, ServiceError>;
+    /// 编辑消息（编辑即截断：更新 payload 文本 + 物理删除后续消息），返回更新后的完整会话
+    async fn edit_message(&self, cmd: EditMessageCmd) -> Result<SessionBO, ServiceError>;
 }
 
 /// 会话服务实现
@@ -167,5 +169,155 @@ impl SessionService for SessionServiceImpl {
 
     async fn purge_recycle_bin(&self) -> Result<i64, ServiceError> {
         Ok(self.recycle_repo.purge_soft_deleted().await?)
+    }
+
+    async fn edit_message(&self, cmd: EditMessageCmd) -> Result<SessionBO, ServiceError> {
+        let text = cmd.text.trim();
+        if text.is_empty() {
+            return Err(ServiceError::validation("消息文本不能为空"));
+        }
+        let msg = self
+            .message_repo
+            .find_by_id(cmd.id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found(format!("消息不存在：{}", cmd.id)))?;
+        // 替换 payload 的 text 键，其余键（thinking/toolCalls 等）原样保留
+        let mut payload: serde_json::Value = serde_json::from_str(&msg.payload)
+            .map_err(|_| ServiceError::validation("消息载荷不是合法 JSON"))?;
+        let obj = payload
+            .as_object_mut()
+            .ok_or_else(|| ServiceError::validation("消息载荷不是 JSON 对象"))?;
+        obj.insert("text".to_string(), serde_json::Value::String(text.to_string()));
+        self.message_repo
+            .update_payload(msg.id, &payload.to_string())
+            .await?;
+        // 编辑即截断：物理删除同会话 seq 更大的消息
+        let removed = self
+            .message_repo
+            .hard_delete_after(msg.session_id, msg.seq)
+            .await?;
+        tracing::info!(message_id = msg.id, removed, "消息已编辑并截断后续");
+        let session = self.load_with_messages(msg.session_id).await?;
+        Ok(SessionBO::from(session))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::db::project_repo::ProjectRepositoryImpl;
+    use crate::infra::db::recycle::RecycleBinRepositoryImpl;
+    use crate::infra::db::session_repo::{MessageRepositoryImpl, SessionRepositoryImpl};
+    use sqlx::SqlitePool;
+
+    fn svc(pool: &SqlitePool) -> SessionServiceImpl {
+        SessionServiceImpl::new(
+            Arc::new(SessionRepositoryImpl::new(pool.clone())),
+            Arc::new(MessageRepositoryImpl::new(pool.clone())),
+            Arc::new(ProjectRepositoryImpl::new(pool.clone())),
+            Arc::new(RecycleBinRepositoryImpl::new(pool.clone())),
+        )
+    }
+
+    async fn seed_session_with_messages(pool: &SqlitePool) -> (i64, Vec<i64>) {
+        let pid = sqlx::query(
+            "INSERT INTO cyan_project (name, path, created_by, updated_by, created_at, updated_at)
+             VALUES ('demo', '/tmp/demo', 'local', 'local', '2026-08-27 10:00:00', '2026-08-27 10:00:00')",
+        )
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        let sid = sqlx::query(
+            "INSERT INTO cyan_session (project_id, title, created_by, updated_by, created_at, updated_at)
+             VALUES (?, 's1', 'local', 'local', '2026-08-27 10:00:00', '2026-08-27 10:00:00')",
+        )
+        .bind(pid)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        let payloads = [
+            ("user", r#"{"text":"问题1"}"#),
+            ("assistant", r#"{"text":"回答1","thinking":"思考内容","toolCalls":[{"callId":"c1","tool":"Read"}]}"#),
+            ("user", r#"{"text":"问题2"}"#),
+            ("assistant", r#"{"text":"回答2"}"#),
+        ];
+        let mut ids = Vec::new();
+        for (i, (kind, payload)) in payloads.iter().enumerate() {
+            let id = sqlx::query(
+                "INSERT INTO cyan_message (session_id, seq, kind, payload, created_by, updated_by, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, 'local', 'local', '2026-08-27 10:00:00', '2026-08-27 10:00:00')",
+            )
+            .bind(sid)
+            .bind((i + 1) as i64)
+            .bind(kind)
+            .bind(payload)
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+            ids.push(id);
+        }
+        (sid, ids)
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn edit_message_updates_text_keeps_keys_and_truncates(pool: SqlitePool) {
+        let svc = svc(&pool);
+        let (sid, ids) = seed_session_with_messages(&pool).await;
+
+        // 编辑第 2 条（assistant，payload 带 thinking/toolCalls 键）
+        let bo = svc
+            .edit_message(EditMessageCmd {
+                id: ids[1],
+                text: "改后的回答".into(),
+            })
+            .await
+            .unwrap();
+
+        // 文本更新且其它键保留
+        let msg_repo = MessageRepositoryImpl::new(pool.clone());
+        let edited = msg_repo.find_by_id(ids[1]).await.unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&edited.payload).unwrap();
+        assert_eq!(v["text"], "改后的回答");
+        assert_eq!(v["thinking"], "思考内容", "thinking 键应原样保留");
+        assert!(v["toolCalls"].is_array(), "toolCalls 键应原样保留");
+
+        // 第 3、4 条物理消失（连同软删记录也查无）
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM cyan_message WHERE session_id = ?")
+            .bind(sid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(total.0, 2, "seq 更大的消息应物理删除");
+
+        // 返回值为截断后的完整会话
+        assert_eq!(bo.messages.len(), 2);
+        assert_eq!(bo.messages[1].payload, edited.payload);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn edit_message_rejects_empty_text_and_missing_id(pool: SqlitePool) {
+        let svc = svc(&pool);
+        let (_, ids) = seed_session_with_messages(&pool).await;
+
+        let err = svc
+            .edit_message(EditMessageCmd {
+                id: ids[0],
+                text: "   ".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, 1001);
+
+        let err = svc
+            .edit_message(EditMessageCmd {
+                id: 9999,
+                text: "x".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, 2002);
     }
 }

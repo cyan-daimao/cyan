@@ -11,7 +11,12 @@ export const sendTask = (
   model: string,
   permMode: PermMode,
   disabledTools: string[],
-) => call<void>('send_task', { request: { sessionId, text, model, permMode, disabledTools } });
+  /** true 时后端不再 append 用户消息（编辑即截断重发场景），直接启动运行 */
+  skipAppend?: boolean,
+) =>
+  call<void>('send_task', {
+    request: { sessionId, text, model, permMode, disabledTools, skipAppend },
+  });
 
 export const interruptRun = (sessionId: number) =>
   call<void>('interrupt_run', { request: { sessionId } });

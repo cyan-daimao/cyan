@@ -333,6 +333,28 @@ impl MessageRepository for MessageRepositoryImpl {
         .await?;
         Ok(())
     }
+
+    async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<Message>> {
+        let row = sqlx::query_as::<_, MessageDO>(
+            "SELECT id, session_id, seq, kind, payload,
+                    created_by, updated_by, created_at, updated_at, deleted_at
+             FROM cyan_message WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(Message::try_from).transpose()
+    }
+
+    async fn hard_delete_after(&self, session_id: i64, seq: i64) -> anyhow::Result<u64> {
+        let rows = sqlx::query("DELETE FROM cyan_message WHERE session_id = ? AND seq > ?")
+            .bind(session_id)
+            .bind(seq)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]

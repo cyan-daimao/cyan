@@ -92,6 +92,41 @@ impl AgentServiceImpl {
     }
 }
 
+/// 用户消息准备（start_run 的前置步骤）：
+/// skip_append=false → 首条任务生成标题 + 追加用户消息落库；
+/// skip_append=true → 校验会话最后一条未删消息为 user kind（编辑重发场景），不新增消息
+async fn prepare_user_message(
+    message_repo: &Arc<dyn MessageRepository>,
+    session_repo: &Arc<dyn SessionRepository>,
+    session: &mut crate::domain::session::Session,
+    text: &str,
+    skip_append: bool,
+) -> Result<(), ServiceError> {
+    session.messages = message_repo.list_by_session(session.id).await?;
+    if skip_append {
+        match session.messages.last() {
+            Some(m) if m.kind == MessageKind::User => return Ok(()),
+            _ => {
+                return Err(ServiceError::validation(
+                    "最后一条不是用户消息，无法重新生成",
+                ))
+            }
+        }
+    }
+    session.apply_first_task_title(text);
+    let mut user_msg = session
+        .append_message(Message::new(
+            session.id,
+            MessageKind::User,
+            Message::text_payload(text.trim()),
+            now_local(),
+        ))
+        .clone();
+    message_repo.insert(&mut user_msg).await?;
+    session_repo.update(session).await?;
+    Ok(())
+}
+
 #[async_trait]
 impl AgentService for AgentServiceImpl {
     async fn start_run(&self, cmd: StartRunCmd) -> Result<(), ServiceError> {
@@ -133,19 +168,15 @@ impl AgentService for AgentServiceImpl {
             .list_visible(cmd.session_id, session.project_id)
             .await?;
 
-        // 首条任务生成标题 + 用户消息落库
-        session.apply_first_task_title(&cmd.text);
-        session.messages = self.message_repo.list_by_session(session.id).await?;
-        let mut user_msg = session
-            .append_message(Message::new(
-                session.id,
-                MessageKind::User,
-                Message::text_payload(cmd.text.trim()),
-                now_local(),
-            ))
-            .clone();
-        self.message_repo.insert(&mut user_msg).await?;
-        self.session_repo.update(&session).await?;
+        // 首条任务生成标题 + 用户消息落库（skip_append：编辑重发场景，校验末尾为 user 不新增）
+        prepare_user_message(
+            &self.message_repo,
+            &self.session_repo,
+            &mut session,
+            &cmd.text,
+            cmd.skip_append,
+        )
+        .await?;
 
         // 启动运行
         let run = Arc::new(AgentRun::new(session.id));
@@ -244,5 +275,101 @@ impl AgentService for AgentServiceImpl {
             .rollback(root.root(), &checkpoint.git_ref, &checkpoint.file_path)?;
         self.checkpoint_repo.mark_rolled_back(cmd.change_id).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::session::{MessageRepository, SessionRepository};
+    use crate::infra::db::session_repo::{MessageRepositoryImpl, SessionRepositoryImpl};
+    use sqlx::SqlitePool;
+
+    async fn seed(pool: &SqlitePool) -> (i64, i64) {
+        let pid = sqlx::query(
+            "INSERT INTO cyan_project (name, path, created_by, updated_by, created_at, updated_at)
+             VALUES ('demo', '/tmp/demo', 'local', 'local', '2026-08-27 10:00:00', '2026-08-27 10:00:00')",
+        )
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        (pid, 0)
+    }
+
+    fn repos(
+        pool: &SqlitePool,
+    ) -> (Arc<dyn MessageRepository>, Arc<dyn SessionRepository>) {
+        (
+            Arc::new(MessageRepositoryImpl::new(pool.clone())),
+            Arc::new(SessionRepositoryImpl::new(pool.clone())),
+        )
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn normal_path_appends_user_message(pool: SqlitePool) {
+        let (pid, _) = seed(&pool).await;
+        let (msg_repo, session_repo) = repos(&pool);
+        let mut session = crate::domain::session::Session::new(pid, now_local());
+        session_repo.insert(&mut session).await.unwrap();
+
+        prepare_user_message(&msg_repo, &session_repo, &mut session, "你好", false)
+            .await
+            .unwrap();
+        let msgs = msg_repo.list_by_session(session.id).await.unwrap();
+        assert_eq!(msgs.len(), 1, "正常路径应追加用户消息");
+        assert_eq!(msgs[0].text().as_deref(), Some("你好"));
+        // 标题由首条任务生成
+        let saved = session_repo.find_by_id(session.id).await.unwrap().unwrap();
+        assert_eq!(saved.title, "你好");
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn skip_append_keeps_messages_when_last_is_user(pool: SqlitePool) {
+        let (pid, _) = seed(&pool).await;
+        let (msg_repo, session_repo) = repos(&pool);
+        let mut session = crate::domain::session::Session::new(pid, now_local());
+        session_repo.insert(&mut session).await.unwrap();
+        prepare_user_message(&msg_repo, &session_repo, &mut session, "原始消息", false)
+            .await
+            .unwrap();
+
+        // skip_append：不新增消息
+        let mut session = session_repo.find_by_id(session.id).await.unwrap().unwrap();
+        prepare_user_message(&msg_repo, &session_repo, &mut session, "编辑后的文本", true)
+            .await
+            .unwrap();
+        let msgs = msg_repo.list_by_session(session.id).await.unwrap();
+        assert_eq!(msgs.len(), 1, "skip_append 不应新增消息");
+        assert_eq!(msgs[0].text().as_deref(), Some("原始消息"));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn skip_append_rejects_when_last_is_not_user(pool: SqlitePool) {
+        let (pid, _) = seed(&pool).await;
+        let (msg_repo, session_repo) = repos(&pool);
+        let mut session = crate::domain::session::Session::new(pid, now_local());
+        session_repo.insert(&mut session).await.unwrap();
+        // 末尾是 assistant 消息
+        prepare_user_message(&msg_repo, &session_repo, &mut session, "问", false)
+            .await
+            .unwrap();
+        let mut m = Message::new(session.id, MessageKind::Assistant, Message::text_payload("答"), now_local());
+        m.seq = 2;
+        msg_repo.insert(&mut m).await.unwrap();
+
+        let mut session = session_repo.find_by_id(session.id).await.unwrap().unwrap();
+        let err = prepare_user_message(&msg_repo, &session_repo, &mut session, "重发", true)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, 1001);
+        assert!(err.message.contains("最后一条不是用户消息"));
+
+        // 空会话同样拒绝
+        let mut s2 = crate::domain::session::Session::new(pid, now_local());
+        session_repo.insert(&mut s2).await.unwrap();
+        assert!(prepare_user_message(&msg_repo, &session_repo, &mut s2, "重发", true)
+            .await
+            .is_err());
     }
 }

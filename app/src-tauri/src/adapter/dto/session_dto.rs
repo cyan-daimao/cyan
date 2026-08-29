@@ -89,6 +89,25 @@ impl From<RestoreSessionRequest> for RestoreSessionCmd {
     }
 }
 
+/// edit_message 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditMessageRequest {
+    /// 消息 id
+    pub id: i64,
+    /// 新文本
+    pub text: String,
+}
+
+impl From<EditMessageRequest> for crate::application::session_service::EditMessageCmd {
+    fn from(r: EditMessageRequest) -> Self {
+        Self {
+            id: r.id,
+            text: r.text,
+        }
+    }
+}
+
 /// token 统计 DTO
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

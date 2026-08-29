@@ -137,6 +137,12 @@ interface SessionState {
     patch: { status: ToolStatus; output?: string; note?: string; outputType?: 'code' | 'diff' | 'text' },
   ) => void;
   updateApproval: (callId: string, state: Exclude<ApprovalState, 'pending'>) => void;
+
+  /* ---- 行内编辑（编辑即截断重发） ---- */
+  /** 用后端返回的完整会话替换当前消息列表 */
+  replaceMessages: (dto: SessionDTO) => void;
+  /** 解析节点的后端消息 id：持久化节点直接取；运行期本地节点按 user/assistant 序号对齐 */
+  resolveMessageId: (nodeId: string) => Promise<number | null>;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -306,5 +312,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         n.kind === 'approval' && n.callId === callId ? { ...n, state } : n,
       ),
     });
+  },
+
+  replaceMessages: (dto) => {
+    clearDeltaBuffer();
+    set({
+      activeId: dto.id,
+      messages: dto.messages.map(dtoToNode).filter((n): n is ChatNode => n !== null),
+    });
+  },
+
+  resolveMessageId: async (nodeId) => {
+    // 持久化消息的节点 id 即后端消息 id（dtoToNode 用 String(m.id)）
+    const direct = Number(nodeId);
+    if (nodeId && Number.isInteger(direct)) return direct;
+    // 运行期本地节点（n1/n2…）：拉取持久化会话，按 user/assistant 序号对齐
+    const { activeId, messages } = get();
+    if (activeId === null) return null;
+    try {
+      const dto = await sessionApi.getSession(activeId);
+      const front = messages.filter((m) => m.kind === 'user' || m.kind === 'assistant');
+      const pos = front.findIndex((m) => m.id === nodeId);
+      if (pos < 0) return null;
+      const back = dto.messages.filter((m) => m.kind === 'user' || m.kind === 'assistant');
+      return pos < back.length ? back[pos].id : null;
+    } catch {
+      return null;
+    }
   },
 }));

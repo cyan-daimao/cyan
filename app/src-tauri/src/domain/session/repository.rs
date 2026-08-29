@@ -42,6 +42,10 @@ pub trait MessageRepository: Send + Sync {
     async fn soft_delete_by_session(&self, session_id: i64) -> anyhow::Result<()>;
     /// 恢复会话全部软删消息（幂等）
     async fn restore_by_session(&self, session_id: i64) -> anyhow::Result<()>;
+    /// 按 id 查询（过滤软删）
+    async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<Message>>;
+    /// 物理删除同会话 seq 更大的所有消息（编辑截断重发），返回删除行数
+    async fn hard_delete_after(&self, session_id: i64, seq: i64) -> anyhow::Result<u64>;
 }
 
 /// 回收站仓储（跨表维护：全库软删记录硬删）
