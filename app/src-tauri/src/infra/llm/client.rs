@@ -116,14 +116,16 @@ impl LlmGateway for OpenAiClient {
             max_tokens: req.max_tokens,
         };
         let url = format!("{}/chat/completions", req.base_url);
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&req.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(map_reqwest_err)?;
+        // 首响等待期也可被中断：send() 与 cancel 竞速，避免等待响应头期间无法停止
+        let resp = tokio::select! {
+            _ = cancel.cancelled() => return Err(LlmError::Aborted),
+            resp = self
+                .http
+                .post(&url)
+                .bearer_auth(&req.api_key)
+                .json(&body)
+                .send() => resp.map_err(map_reqwest_err)?,
+        };
 
         let status = resp.status();
         if !status.is_success() {

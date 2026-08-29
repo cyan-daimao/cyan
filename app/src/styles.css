@@ -2237,8 +2237,9 @@ pre {
   gap: 8px;
 }
 
-/* 用户气泡编辑态：气泡加宽些 */
+/* 用户气泡编辑态：不再随原文缩短，给足编辑宽度 */
 .msg-user.msg-editing {
+  width: min(78%, 640px);
   min-width: 280px;
 }
 
