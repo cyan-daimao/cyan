@@ -106,7 +106,7 @@ impl From<ModelBO> for ModelDTO {
     }
 }
 
-/// save_mcp_server 请求
+/// save_mcp_server 请求（安装市场条目复用此结构，字段不得变更）
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveMcpRequest {
@@ -188,6 +188,56 @@ impl From<McpServerBO> for McpServerDTO {
             status: bo.status,
             tools: bo.tools,
             last_error: bo.last_error,
+        }
+    }
+}
+
+/// search_mcp_market 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchMcpMarketRequest {
+    /// 关键字（空串 = 只返回精选）
+    pub keyword: String,
+}
+
+impl From<SearchMcpMarketRequest> for crate::application::config_service::SearchMcpMarketQuery {
+    fn from(r: SearchMcpMarketRequest) -> Self {
+        Self {
+            keyword: r.keyword,
+        }
+    }
+}
+
+/// MCP 市场条目 DTO
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpMarketItemDTO {
+    /// 服务器标识
+    pub name: String,
+    /// 展示标题
+    pub title: String,
+    /// 描述
+    pub description: String,
+    /// 版本
+    pub version: String,
+    /// 安装命令（null = 不可安装，前端禁用按钮）
+    pub command: Option<String>,
+    /// 来源（featured/registry）
+    pub source: String,
+    /// 主页
+    pub homepage: Option<String>,
+}
+
+impl From<crate::application::config_service::McpMarketItemBO> for McpMarketItemDTO {
+    fn from(bo: crate::application::config_service::McpMarketItemBO) -> Self {
+        Self {
+            name: bo.name,
+            title: bo.title,
+            description: bo.description,
+            version: bo.version,
+            command: bo.command,
+            source: bo.source,
+            homepage: bo.homepage,
         }
     }
 }

@@ -1,5 +1,6 @@
 import { call } from './invoke';
 import type {
+  McpMarketItemDTO,
   McpServerDTO,
   ModelDTO,
   PermAction,
@@ -36,6 +37,10 @@ export const toggleMcpServer = (id: number, enable: boolean) =>
 
 export const deleteMcpServer = (id: number) =>
   call<void>('delete_mcp_server', { request: { id } });
+
+/** MCP 市场：keyword 空返回精选列表；有关键字时精选在前 + registry 结果在后 */
+export const searchMcpMarket = (keyword: string) =>
+  call<McpMarketItemDTO[]>('search_mcp_market', { request: { keyword } });
 
 /* ---- 权限规则（三级作用域：全局 / 本项目 / 本会话） ---- */
 

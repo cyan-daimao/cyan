@@ -94,9 +94,31 @@ pub async fn search_plugins(keyword: &str) -> anyhow::Result<Vec<MarketItem>> {
     search_market(keyword, "cyan-plugin").await
 }
 
-/// 搜索技能市场（topic:cyan-skill）
+/// 搜索技能市场（并发搜 topic:cyan-skill 与 topic:claude-skill，合并去重取前 20）
 pub async fn search_skills(keyword: &str) -> anyhow::Result<Vec<MarketItem>> {
-    search_market(keyword, "cyan-skill").await
+    let (a, b) = tokio::join!(
+        search_market(keyword, "cyan-skill"),
+        search_market(keyword, "claude-skill"),
+    );
+    // 一路失败不拖垮另一路；两路都失败才报错
+    let items = match (a, b) {
+        (Err(ea), Err(eb)) => return Err(anyhow::anyhow!("{ea:#}；{eb:#}")),
+        (Ok(x), Err(_)) | (Err(_), Ok(x)) => x,
+        (Ok(x), Ok(y)) => merge_market_items(x, y),
+    };
+    Ok(items.into_iter().take(20).collect())
+}
+
+/// 合并两路市场结果：按 full_name 去重（a 优先）、按 stars 降序（纯函数，便于测试）
+fn merge_market_items(a: Vec<MarketItem>, b: Vec<MarketItem>) -> Vec<MarketItem> {
+    let mut seen = std::collections::HashSet::new();
+    let mut merged: Vec<MarketItem> = a
+        .into_iter()
+        .chain(b)
+        .filter(|i| seen.insert(i.full_name.clone()))
+        .collect();
+    merged.sort_by_key(|x| std::cmp::Reverse(x.stars));
+    merged
 }
 
 /// 下载仓库 zip（codeload HEAD）到临时文件；调用方持有 TempPath 直至安装完成
@@ -229,5 +251,23 @@ mod tests {
         assert!(e.to_string().contains("限流"));
         let e = status_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR);
         assert!(e.to_string().contains("500"));
+    }
+
+    #[test]
+    fn merge_market_items_dedupes_and_sorts_by_stars() {
+        let item = |name: &str, stars: i64| MarketItem {
+            full_name: name.into(),
+            description: None,
+            stars,
+            author: String::new(),
+            url: String::new(),
+        };
+        let a = vec![item("cy/a", 10), item("cy/shared", 5)];
+        let b = vec![item("cy/shared", 99), item("cy/b", 50)];
+        let merged = merge_market_items(a, b);
+        // 去重：a 优先保留；stars 降序
+        let names: Vec<&str> = merged.iter().map(|i| i.full_name.as_str()).collect();
+        assert_eq!(names, vec!["cy/b", "cy/a", "cy/shared"]);
+        assert_eq!(merged[2].stars, 5, "同名保留 a 路（cyan-skill）的结果");
     }
 }

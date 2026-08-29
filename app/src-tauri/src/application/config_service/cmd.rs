@@ -60,6 +60,13 @@ pub struct DeleteMcpCmd {
     pub id: i64,
 }
 
+/// MCP 市场搜索查询
+#[derive(Debug, Clone)]
+pub struct SearchMcpMarketQuery {
+    /// 关键字（空串 = 只返回精选）
+    pub keyword: String,
+}
+
 /// 保存权限规则命令（新建按 scope+tool+pattern 幂等 upsert；编辑按 id，沿用原范围）
 #[derive(Debug, Clone)]
 pub struct SavePermRuleCmd {

@@ -10,11 +10,12 @@ use crate::domain::config::{
 };
 use crate::error::ServiceError;
 use crate::infra::db::now_local;
-use crate::infra::{mcp as mcp_infra, secret};
+use crate::infra::{mcp as mcp_infra, mcp_registry, secret};
 
 use super::{
-    DeleteMcpCmd, DeleteModelCmd, DeletePermRuleCmd, McpServerBO, ModelBO, PermRuleBO, SaveMcpCmd,
-    SaveModelCmd, SavePermRuleCmd, SetDefaultModelCmd, ToggleMcpCmd,
+    DeleteMcpCmd, DeleteModelCmd, DeletePermRuleCmd, McpMarketItemBO, McpServerBO, ModelBO,
+    PermRuleBO, SaveMcpCmd, SaveModelCmd, SavePermRuleCmd, SearchMcpMarketQuery, SetDefaultModelCmd,
+    ToggleMcpCmd,
 };
 
 /// 配置服务
@@ -36,6 +37,11 @@ pub trait ConfigService: Send + Sync {
     async fn toggle_mcp_server(&self, cmd: ToggleMcpCmd) -> Result<McpServerBO, ServiceError>;
     /// 删除 MCP 服务器
     async fn delete_mcp_server(&self, cmd: DeleteMcpCmd) -> Result<(), ServiceError>;
+    /// MCP 市场搜索（精选 + 官方 registry；空关键字只返回精选）
+    async fn search_mcp_market(
+        &self,
+        query: SearchMcpMarketQuery,
+    ) -> Result<Vec<McpMarketItemBO>, ServiceError>;
     /// 全局权限规则列表（设置页管理）
     async fn list_global_rules(&self) -> Result<Vec<PermRuleBO>, ServiceError>;
     /// 会话可见权限规则列表（全局 + 项目 + 会话，sort 升序）
@@ -216,6 +222,37 @@ impl ConfigService for ConfigServiceImpl {
         Ok(())
     }
 
+    async fn search_mcp_market(
+        &self,
+        query: SearchMcpMarketQuery,
+    ) -> Result<Vec<McpMarketItemBO>, ServiceError> {
+        let keyword = query.keyword.trim().to_lowercase();
+        // 空关键字：只返回精选
+        let featured = mcp_registry::featured_servers();
+        if keyword.is_empty() {
+            return Ok(featured.into_iter().map(McpMarketItemBO::from).collect());
+        }
+        // 精选中名称/标题/描述匹配的排在前
+        let hit = |i: &mcp_registry::McpMarketItem| {
+            [&i.name, &i.title, &i.description]
+                .iter()
+                .any(|f| f.to_lowercase().contains(&keyword))
+        };
+        let featured_hits: Vec<_> = featured.iter().filter(|i| hit(i)).cloned().collect();
+        // registry 结果在后；与精选同 command 的剔除（去重）
+        let registry = mcp_registry::search_registry(&keyword).await?;
+        let featured_cmds: std::collections::HashSet<_> = featured
+            .iter()
+            .filter_map(|i| i.command.clone())
+            .collect();
+        let merged = featured_hits.into_iter().chain(
+            registry
+                .into_iter()
+                .filter(|i| i.command.as_ref().map(|c| !featured_cmds.contains(c)).unwrap_or(true)),
+        );
+        Ok(merged.map(McpMarketItemBO::from).collect())
+    }
+
     async fn list_global_rules(&self) -> Result<Vec<PermRuleBO>, ServiceError> {
         let rules = self.perm_repo.list_global().await?;
         Ok(rules.into_iter().map(PermRuleBO::from).collect())
@@ -303,5 +340,37 @@ impl ConfigService for ConfigServiceImpl {
     async fn delete_perm_rule(&self, cmd: DeletePermRuleCmd) -> Result<(), ServiceError> {
         self.perm_repo.soft_delete(cmd.id).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::db::mcp_repo::McpRepositoryImpl;
+    use crate::infra::db::model_repo::ModelRepositoryImpl;
+    use crate::infra::db::perm_rule_repo::PermRuleRepositoryImpl;
+    use sqlx::SqlitePool;
+
+    fn svc(pool: &SqlitePool) -> ConfigServiceImpl {
+        ConfigServiceImpl::new(
+            Arc::new(ModelRepositoryImpl::new(pool.clone())),
+            Arc::new(McpRepositoryImpl::new(pool.clone())),
+            Arc::new(PermRuleRepositoryImpl::new(pool.clone())),
+        )
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn search_mcp_market_empty_keyword_returns_featured_only(pool: SqlitePool) {
+        // 空关键字：不打网络，只返回精选
+        let items = svc(&pool)
+            .search_mcp_market(SearchMcpMarketQuery {
+                keyword: String::new(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 8);
+        assert!(items.iter().all(|i| i.source == "featured"));
+        assert!(items.iter().all(|i| i.command.is_some()));
+        assert!(items.iter().any(|i| i.name == "context7"));
     }
 }

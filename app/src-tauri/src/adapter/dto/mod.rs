@@ -14,8 +14,8 @@ pub use agent_dto::{
 };
 pub use config_dto::{
     DeleteMcpRequest, DeleteModelRequest, DeletePermRuleRequest, ListVisibleRulesRequest,
-    McpServerDTO, ModelDTO, PermRuleDTO, SaveMcpRequest, SaveModelRequest, SavePermRuleRequest,
-    SetDefaultModelRequest, ToggleMcpRequest,
+    McpMarketItemDTO, McpServerDTO, ModelDTO, PermRuleDTO, SaveMcpRequest, SaveModelRequest,
+    SavePermRuleRequest, SearchMcpMarketRequest, SetDefaultModelRequest, ToggleMcpRequest,
 };
 pub use file_dto::{FileNodeDTO, FilePreviewDTO, FilePreviewRequest, FileTreeRequest};
 pub use plugin_dto::{

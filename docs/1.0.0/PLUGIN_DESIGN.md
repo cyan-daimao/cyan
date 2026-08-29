@@ -49,10 +49,10 @@ enabled: true        # 可选，缺省 true
 
 能力面板「技能」Tab：列表（名称/描述/来源/启用状态）+ 新增/编辑（文件名、名称、描述、正文）+ 删除。
 
-### 2.6 技能市场（v1.2 已落地）
+### 2.6 技能市场（v1.2 已落地，v1.3 扩展）
 
-- **仓库约定**：GitHub 仓库打 `cyan-skill` topic；zip 解压后顶层 `*.md`（排除 `README.md`）与 `skills/*.md` 均视为技能文件，文件名即技能 id，格式同 2.1（frontmatter + 正文）。
-- **搜索**：`search_skill_market` 走 GitHub Search API（`topic:cyan-skill` + 关键词，按 stars 排序），与插件市场共用限流策略；支持粘贴 `owner/repo` 或 GitHub URL 直接安装。
+- **仓库约定**：GitHub 仓库打 `cyan-skill` topic；zip 解压后顶层 `*.md`（排除 `README.md`）与 `skills/*.md` 均视为技能文件，文件名即技能 id，格式同 2.1（frontmatter + 正文）。v1.3 起兼容 Claude 目录式布局：一层子目录 `*/SKILL.md`（大小写不敏感）也收录，技能 id 取目录名——GitHub 上存量 Claude skills 仓库可直接安装。
+- **搜索**：`search_skill_market` 走 GitHub Search API，v1.3 起并发搜 `topic:cyan-skill` + `topic:claude-skill` 两路，合并去重按 stars 排序；支持粘贴 `owner/repo` 或 GitHub URL 直接安装。
 - **安装**：`install_skill_from_github` 下载 codeload zip → 收集技能 md → 逐个校验 id（与全局同名冲突则整体回滚报错）→ 写入 `~/.cyan/skills/` 并在 frontmatter 注入 `market: owner/repo` 溯源。
 - **溯源**：`Skill.market_repo`（frontmatter `market` 键），面板「已安装」判定与来源展示依赖该字段；删除技能即清除溯源。
 
@@ -131,7 +131,14 @@ Tauri 侧：`asset` protocol scope 增加 `~/.cyan/plugins/**`，iframe src 用 
 - 复用 `infra/mcp` 的子进程管理；与 MCP 的差异：sidecar 不只暴露工具给 Agent，还可给插件 UI 供数据
 - 安全边界：子进程无法真沙箱 → 配合 Seatbelt 沙箱（独立安全项）落地；此前靠「安装时权限明示 + 用户信任」
 
-## 6. 权限模型
+## 6. MCP 市场（v1.3 已落地）
+
+- **精选区**：内置 8 个知名开源 MCP server（Context7 / Playwright / Chrome DevTools / Filesystem / GitHub / Memory / Fetch / Time），硬编码在 `infra/mcp_registry.rs::featured_servers`，无需对方打任何 topic。
+- **registry 搜索**：`search_mcp_market` 走 MCP 官方 registry（`GET registry.modelcontextprotocol.io/v0/servers?search=`），按 `isLatest` 过滤同名多版本；npm 包映射 `npx -y <包名>`、pypi 映射 `uvx <包名>`，仅 stdio transport 可装，远程服务（command 为空）前端禁用安装。
+- **安装**：复用 `save_mcp_server`，落库即 `disabled`，用户到「已安装」手动启用（握手与状态展示不变）。
+- 关键字为空时只返回精选（不打网络）；有关键字时匹配的精选在前、registry 结果在后，按 command 去重。
+
+## 7. 权限模型
 
 `permissions` 声明在安装/启用时弹窗明示，运行期强制：
 
@@ -143,7 +150,7 @@ Tauri 侧：`asset` protocol scope 增加 `~/.cyan/plugins/**`，iframe src 用 
 | `network` | sidecar 可出网（v3） |
 | `ui` | 注册 UI 面板（v2） |
 
-## 7. 实施路线
+## 8. 实施路线
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
@@ -151,5 +158,6 @@ Tauri 侧：`asset` protocol scope 增加 `~/.cyan/plugins/**`，iframe src 用 
 | 插件 v1 | 声明式能力包安装/启停/卸载 | ✅ 已落地 |
 | 插件 v1.1 | 插件市场（GitHub 搜索 + 一键安装） | ✅ 已落地 |
 | 技能 v1.2 | 技能市场（GitHub `cyan-skill` topic + 一键安装到全局） | ✅ 已落地 |
+| 市场 v1.3 | MCP 官方 registry + 精选知名工具一键安装；技能兼容 Claude `*/SKILL.md` 布局、搜索并入 `claude-skill` topic | ✅ 已落地 |
 | 插件 v2 | iframe 沙箱 UI + bridge 协议 | 规划中 |
 | 插件 v3 | sidecar 后端 + Seatbelt | 规划中 |

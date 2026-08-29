@@ -2251,3 +2251,32 @@ pre {
 [data-theme='dark'] .msg-assistant .msg-edit-input {
   background: #14161a;
 }
+
+/* ============ MCP 市场（复用 market-card 体系的小补充） ============ */
+.market-card .mc-name-sub {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.market-card .mc-version {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.market-card .mc-home {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.market-card .mc-home:hover {
+  color: var(--brand);
+}
+
+/* ---- 深色 ---- */
+[data-theme='dark'] .market-card .mc-home {
+  color: var(--text-3);
+}
+
+[data-theme='dark'] .market-card .mc-home:hover {
+  color: var(--primary-hover);
+}

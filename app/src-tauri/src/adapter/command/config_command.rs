@@ -7,8 +7,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::adapter::dto::{
     DeleteMcpRequest, DeleteModelRequest, DeletePermRuleRequest, ListVisibleRulesRequest,
-    McpServerDTO, ModelDTO, PermRuleDTO, SaveMcpRequest, SaveModelRequest, SavePermRuleRequest,
-    SetDefaultModelRequest, ToggleMcpRequest,
+    McpMarketItemDTO, McpServerDTO, ModelDTO, PermRuleDTO, SaveMcpRequest, SaveModelRequest,
+    SavePermRuleRequest, SearchMcpMarketRequest, SetDefaultModelRequest, ToggleMcpRequest,
 };
 use crate::application::config_service::ConfigService;
 use crate::error::ServiceError;
@@ -111,6 +111,16 @@ pub async fn delete_mcp_server(
     svc.delete_mcp_server(request.into()).await?;
     emit_config_changed(&app, "mcp");
     Ok(())
+}
+
+/// MCP 市场搜索（精选 + 官方 registry；只读不发 config:changed）
+#[tauri::command]
+pub async fn search_mcp_market(
+    svc: State<'_, Arc<dyn ConfigService>>,
+    request: SearchMcpMarketRequest,
+) -> Result<Vec<McpMarketItemDTO>, ServiceError> {
+    let bos = svc.search_mcp_market(request.into()).await?;
+    Ok(bos.into_iter().map(McpMarketItemDTO::from).collect())
 }
 
 /// 全局权限规则列表（设置页）

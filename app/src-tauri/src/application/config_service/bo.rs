@@ -69,6 +69,39 @@ impl From<McpServer> for McpServerBO {
     }
 }
 
+/// MCP 市场条目 BO
+#[derive(Debug, Clone)]
+pub struct McpMarketItemBO {
+    /// 服务器标识
+    pub name: String,
+    /// 展示标题
+    pub title: String,
+    /// 描述
+    pub description: String,
+    /// 版本
+    pub version: String,
+    /// 安装命令（None = 不可安装）
+    pub command: Option<String>,
+    /// 来源（featured/registry）
+    pub source: String,
+    /// 主页
+    pub homepage: Option<String>,
+}
+
+impl From<crate::infra::mcp_registry::McpMarketItem> for McpMarketItemBO {
+    fn from(m: crate::infra::mcp_registry::McpMarketItem) -> Self {
+        Self {
+            name: m.name,
+            title: m.title,
+            description: m.description,
+            version: m.version,
+            command: m.command,
+            source: m.source.to_string(),
+            homepage: m.homepage,
+        }
+    }
+}
+
 /// 权限规则 BO
 #[derive(Debug, Clone)]
 pub struct PermRuleBO {

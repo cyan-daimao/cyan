@@ -180,6 +180,7 @@ pub fn run() {
             config_command::save_mcp_server,
             config_command::toggle_mcp_server,
             config_command::delete_mcp_server,
+            config_command::search_mcp_market,
             // 权限规则
             config_command::list_global_perm_rules,
             config_command::list_visible_perm_rules,

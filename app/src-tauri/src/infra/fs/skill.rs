@@ -164,7 +164,18 @@ pub fn delete_skill_file(
     Ok(())
 }
 
-/// 收集解压目录中的技能 md：顶层 `*.md`（排除 README.md）+ `skills/*.md`，按文件名排序
+/// 由文件路径推导技能 id：`*/SKILL.md`（大小写不敏感）取目录名（Claude 目录式），否则取文件 stem
+pub fn skill_id_of(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    if file_name.eq_ignore_ascii_case("skill.md") {
+        let dir = path.parent()?.file_name()?.to_str()?;
+        return Some(dir.to_string());
+    }
+    path.file_stem()?.to_str().map(String::from)
+}
+
+/// 收集解压目录中的技能 md：顶层 `*.md`（排除 README.md）+ `skills/*.md` + 一层子目录的 `*/SKILL.md`
+/// （Claude 目录式，id = 目录名，非法目录名跳过并 warn）。三种来源按技能 id 去重后排序。
 pub fn collect_skill_files(extracted_dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = Vec::new();
     let push_md = |dir: &Path, files: &mut Vec<PathBuf>| {
@@ -189,8 +200,39 @@ pub fn collect_skill_files(extracted_dir: &Path) -> Vec<PathBuf> {
     }));
     // skills/ 子目录
     push_md(&extracted_dir.join("skills"), &mut files);
+    // Claude 目录式：一层子目录的 */SKILL.md（大小写不敏感）
+    if let Ok(entries) = std::fs::read_dir(extracted_dir) {
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let Ok(sub) = std::fs::read_dir(&dir) else { continue };
+            for f in sub.flatten() {
+                let path = f.path();
+                let is_skill_md = path.is_file()
+                    && path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.eq_ignore_ascii_case("skill.md"))
+                        .unwrap_or(false);
+                if is_skill_md {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    // 按技能 id 去重（先收先生效：顶层 > skills/ > 目录式），非法 id 跳过并 warn
+    let mut seen = std::collections::HashSet::new();
+    files.retain(|p| match skill_id_of(p) {
+        Some(id) if Skill::validate_id(&id).is_ok() => seen.insert(id),
+        Some(id) => {
+            tracing::warn!(id, path = %p.display(), "跳过非法技能 id（目录式 SKILL.md 的目录名须为 kebab-case）");
+            false
+        }
+        None => false,
+    });
     files.sort();
-    files.dedup();
     files
 }
 
@@ -207,14 +249,13 @@ pub fn install_skill_files(
     // 解析 + 校验全部技能（先解析后写盘，失败零副作用）
     let mut skills: Vec<Skill> = Vec::new();
     for file in files {
-        let id = file
-            .file_stem()
-            .and_then(|s| s.to_str())
+        // 目录式 SKILL.md 取目录名为 id，其余取文件 stem
+        let id = skill_id_of(file)
             .ok_or_else(|| DomainError::Validation(format!("非法技能文件名：{}", file.display())))?;
-        Skill::validate_id(id)?;
+        Skill::validate_id(&id)?;
         let text = std::fs::read_to_string(file)
             .map_err(|e| DomainError::Validation(format!("读取技能文件失败：{e}")))?;
-        let mut skill = parse_skill(id, &text, SkillSource::Global)?;
+        let mut skill = parse_skill(&id, &text, SkillSource::Global)?;
         skill.market_repo = Some(market_repo.to_string());
         skills.push(skill);
     }
@@ -330,6 +371,42 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["inner-skill.md", "top-skill.md"], "排除 README、按路径排序");
+    }
+
+    #[test]
+    fn collect_skill_files_supports_claude_dir_style() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 目录式：id = 目录名
+        std::fs::create_dir_all(tmp.path().join("code-review")).unwrap();
+        std::fs::write(tmp.path().join("code-review/SKILL.md"), "---\nname: 评审\n---\nb").unwrap();
+        // 大小写不敏感
+        std::fs::create_dir_all(tmp.path().join("weekly-report")).unwrap();
+        std::fs::write(tmp.path().join("weekly-report/skill.md"), "---\nname: 周报\n---\nb").unwrap();
+        // 非法目录名跳过
+        std::fs::create_dir_all(tmp.path().join("Bad Name")).unwrap();
+        std::fs::write(tmp.path().join("Bad Name/SKILL.md"), "---\nname: 坏\n---\nb").unwrap();
+        // 同 id 去重：顶层 dup.md 先收，dup/SKILL.md 被去重
+        std::fs::write(tmp.path().join("dup.md"), "---\nname: 顶层版\n---\nb").unwrap();
+        std::fs::create_dir_all(tmp.path().join("dup")).unwrap();
+        std::fs::write(tmp.path().join("dup/SKILL.md"), "---\nname: 目录版\n---\nb").unwrap();
+
+        let files = collect_skill_files(tmp.path());
+        let mut ids: Vec<String> = files.iter().filter_map(|p| skill_id_of(p)).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["code-review", "dup", "weekly-report"],
+            "目录式收录 + 非法目录名跳过 + 同 id 去重"
+        );
+        // 去重保留先收的顶层文件
+        assert!(files.iter().any(|p| p.ends_with("dup.md")));
+        assert!(!files.iter().any(|p| p.ends_with("dup/SKILL.md")));
+        // id 推导：目录式取目录名
+        let skill_md = files
+            .iter()
+            .find(|p| p.ends_with("code-review/SKILL.md"))
+            .expect("应收录目录式 SKILL.md");
+        assert_eq!(skill_id_of(skill_md).as_deref(), Some("code-review"));
     }
 
     #[test]

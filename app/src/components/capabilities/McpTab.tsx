@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Table, Tag, Tooltip } from 'antd';
+import { Alert, Button, Segmented, Table, Tag, Tooltip } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { McpServerDTO } from '../../types';
@@ -7,6 +7,7 @@ import { useConfigStore } from '../../stores/configStore';
 import { confirmDanger, toast } from '../../utils/feedback';
 import { Empty } from '../common/Empty';
 import { McpFormModal } from './McpFormModal';
+import { McpMarketView } from './McpMarketView';
 
 /** 设置 - MCP 服务器：启用/禁用/编辑/删除 + 连接状态展示 */
 export function McpTab() {
@@ -18,6 +19,8 @@ export function McpTab() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<McpServerDTO | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
+  /** 已安装 / 市场 视图切换 */
+  const [view, setView] = useState<'installed' | 'market'>('installed');
 
   const onToggle = async (s: McpServerDTO) => {
     const enable = s.status === 'disabled';
@@ -115,6 +118,19 @@ export function McpTab() {
 
   return (
     <div>
+      <Segmented
+        value={view}
+        onChange={(v) => setView(v as 'installed' | 'market')}
+        options={[
+          { label: '已安装', value: 'installed' },
+          { label: '市场', value: 'market' },
+        ]}
+        style={{ marginBottom: 12 }}
+      />
+      {view === 'market' ? (
+        <McpMarketView />
+      ) : (
+        <>
       <Alert
         type="warning"
         showIcon
@@ -143,6 +159,8 @@ export function McpTab() {
         pagination={false}
       />
       <McpFormModal open={formOpen} editing={editing} onClose={() => setFormOpen(false)} />
+        </>
+      )}
     </div>
   );
 }

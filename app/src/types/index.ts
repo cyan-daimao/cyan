@@ -337,3 +337,22 @@ export interface MarketItemDTO {
   author: string;
   url: string;
 }
+
+/* ============================================================
+ * MCP 市场（精选 featured + 官方 registry 搜索）
+ * ============================================================ */
+
+/** MCP 市场条目 DTO */
+export interface McpMarketItemDTO {
+  /** registry 全名或精选短名 */
+  name: string;
+  /** 展示名 */
+  title: string;
+  description: string;
+  /** featured 为 '' 或 'latest' */
+  version: string;
+  /** 启动命令；null = 远程服务暂不支持安装 */
+  command: string | null;
+  source: 'featured' | 'registry';
+  homepage: string | null;
+}

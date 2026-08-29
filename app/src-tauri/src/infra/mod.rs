@@ -5,6 +5,7 @@ pub mod fs;
 pub mod git;
 pub mod llm;
 pub mod mcp;
+pub mod mcp_registry;
 pub mod plugin;
 pub mod process;
 pub mod secret;
