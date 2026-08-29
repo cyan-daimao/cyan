@@ -62,6 +62,7 @@ fn init_tracing() {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             init_tracing();
             tracing::info!("cyan 启动，初始化数据库");

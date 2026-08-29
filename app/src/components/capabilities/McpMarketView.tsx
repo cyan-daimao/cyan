@@ -5,6 +5,7 @@ import type { McpMarketItemDTO } from '../../types';
 import { searchMcpMarket } from '../../services/config';
 import { useConfigStore } from '../../stores/configStore';
 import { errText, toast } from '../../utils/feedback';
+import { openExternal } from '../../utils/openExternal';
 import { Empty } from '../common/Empty';
 
 /** 安装时写入的服务器名：title 的 slug，兜底 name 最后一段；合法且不超长 */
@@ -97,9 +98,11 @@ export function McpMarketView() {
                         <a
                           className="mc-home"
                           href={it.homepage}
-                          target="_blank"
-                          rel="noreferrer"
                           title={it.homepage}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            void openExternal(it.homepage ?? '');
+                          }}
                         >
                           <LinkOutlined />
                         </a>

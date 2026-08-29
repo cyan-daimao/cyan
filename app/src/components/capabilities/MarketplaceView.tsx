@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Input, Segmented, Spin } from 'antd';
+import { Button, Input, Spin } from 'antd';
 import { DownloadOutlined, StarOutlined } from '@ant-design/icons';
 import type { MarketItemDTO } from '../../types';
 import { installPluginFromGithub, searchMarketplace } from '../../services/plugin';
@@ -8,6 +8,7 @@ import { usePluginStore } from '../../stores/pluginStore';
 import { useSkillStore } from '../../stores/skillStore';
 import { useProjectStore } from '../../stores/projectStore';
 import { errText, toast } from '../../utils/feedback';
+import { openExternal } from '../../utils/openExternal';
 import { Empty } from '../common/Empty';
 
 /** 从搜索词解析可直接安装的仓库 fullName（github.com/owner/repo 或 owner/repo） */
@@ -29,7 +30,7 @@ interface MarketDim {
   isInstalled: (fullName: string) => boolean;
 }
 
-/** 市场搜索面板：插件与技能两个 tab 共用（各自持有独立实例状态） */
+/** 市场搜索面板：插件与技能两个维度共用（各自持有独立实例状态） */
 function MarketSearchPanel({ dim }: { dim: MarketDim }) {
   const [keyword, setKeyword] = useState('');
   const [items, setItems] = useState<MarketItemDTO[]>([]);
@@ -119,8 +120,10 @@ function MarketSearchPanel({ dim }: { dim: MarketDim }) {
                       <a
                         className="mc-name mono"
                         href={it.url}
-                        target="_blank"
-                        rel="noreferrer"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void openExternal(it.url);
+                        }}
                       >
                         {it.fullName}
                       </a>
@@ -152,67 +155,60 @@ function MarketSearchPanel({ dim }: { dim: MarketDim }) {
   );
 }
 
-/** 插件市场视图：插件 / 技能两个维度，各自独立的搜索与安装状态 */
-export function MarketplaceView() {
-  const [dim, setDim] = useState<'plugin' | 'skill'>('plugin');
-
+/** 插件市场视图（挂在能力面板「插件」Tab 的市场分支） */
+export function PluginMarketView() {
   const installedPlugins = usePluginStore((s) => s.plugins);
   const reloadPlugins = usePluginStore((s) => s.load);
+
+  const dim = useMemo<MarketDim>(
+    () => ({
+      search: searchMarketplace,
+      install: async (fullName) => {
+        const dto = await installPluginFromGithub(fullName);
+        await reloadPlugins(true);
+        toast.success(
+          `已安装 ${dto.name} v${dto.version}（技能 ${dto.skillCount} · MCP ${dto.mcpCount} · 规则 ${dto.ruleCount}）`,
+        );
+      },
+      emptyText: '没有匹配的插件仓库（约定：cyan 插件仓库需打 cyan-plugin topic）',
+      // 已安装判定：插件名 = 仓库 repo 段
+      isInstalled: (fullName) =>
+        installedPlugins.some((p) => p.name === (fullName.split('/')[1] ?? '')),
+    }),
+    [installedPlugins, reloadPlugins],
+  );
+
+  return <MarketSearchPanel dim={dim} />;
+}
+
+/** 技能市场视图（挂在能力面板「技能」Tab 的市场分支） */
+export function SkillMarketView() {
   const skills = useSkillStore((s) => s.skills);
   const loadSkills = useSkillStore((s) => s.load);
   const skillLoadedFor = useSkillStore((s) => s.loadedFor);
   const project = useProjectStore((s) => s.current);
 
-  // 进入技能 tab 时确保技能 store 已加载（按项目缓存键去重）
+  // 进入市场时确保技能 store 已加载（按项目缓存键去重）
   useEffect(() => {
-    if (dim === 'skill') void loadSkills(project?.path ?? '');
+    void loadSkills(project?.path ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dim, project?.path]);
+  }, [project?.path]);
 
-  const dims = useMemo<Record<'plugin' | 'skill', MarketDim>>(
+  const dim = useMemo<MarketDim>(
     () => ({
-      plugin: {
-        search: searchMarketplace,
-        install: async (fullName) => {
-          const dto = await installPluginFromGithub(fullName);
-          await reloadPlugins(true);
-          toast.success(
-            `已安装 ${dto.name} v${dto.version}（技能 ${dto.skillCount} · MCP ${dto.mcpCount} · 规则 ${dto.ruleCount}）`,
-          );
-        },
-        emptyText: '没有匹配的插件仓库（约定：cyan 插件仓库需打 cyan-plugin topic）',
-        // 已安装判定：插件名 = 仓库 repo 段
-        isInstalled: (fullName) =>
-          installedPlugins.some((p) => p.name === (fullName.split('/')[1] ?? '')),
+      search: searchSkillMarket,
+      install: async (fullName) => {
+        const list = await installSkillFromGithub(fullName);
+        // 强制刷新技能列表，切回「已安装」立即可见（来源带「市场」Tag）
+        await loadSkills(skillLoadedFor ?? project?.path ?? '', true);
+        toast.success(`已安装 ${list.length} 个技能：${list.map((s) => s.name).join('、')}`);
       },
-      skill: {
-        search: searchSkillMarket,
-        install: async (fullName) => {
-          const list = await installSkillFromGithub(fullName);
-          await loadSkills(skillLoadedFor ?? project?.path ?? '', true);
-          toast.success(`已安装 ${list.length} 个技能：${list.map((s) => s.name).join('、')}`);
-        },
-        emptyText: '没有匹配的技能仓库（约定：cyan 技能仓库需打 cyan-skill topic）',
-        // 已安装判定：存在 marketRepo 对应该仓库的技能
-        isInstalled: (fullName) => skills.some((s) => s.marketRepo === fullName),
-      },
+      emptyText: '没有匹配的技能仓库（约定：cyan 技能仓库需打 cyan-skill topic）',
+      // 已安装判定：存在 marketRepo 对应该仓库的技能
+      isInstalled: (fullName) => skills.some((s) => s.marketRepo === fullName),
     }),
-    [installedPlugins, skills, reloadPlugins, loadSkills, skillLoadedFor, project?.path],
+    [skills, loadSkills, skillLoadedFor, project?.path],
   );
 
-  return (
-    <div>
-      <Segmented
-        value={dim}
-        onChange={(v) => setDim(v as 'plugin' | 'skill')}
-        options={[
-          { label: '插件', value: 'plugin' },
-          { label: '技能', value: 'skill' },
-        ]}
-        style={{ marginBottom: 12 }}
-      />
-      {/* 两个维度各挂一个实例，切换时重置搜索状态（保持简单） */}
-      <MarketSearchPanel key={dim} dim={dims[dim]} />
-    </div>
-  );
+  return <MarketSearchPanel dim={dim} />;
 }

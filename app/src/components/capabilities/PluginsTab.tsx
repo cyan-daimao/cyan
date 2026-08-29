@@ -7,7 +7,7 @@ import type { PluginDTO } from '../../types';
 import { usePluginStore } from '../../stores/pluginStore';
 import { confirmDanger, toast } from '../../utils/feedback';
 import { Empty } from '../common/Empty';
-import { MarketplaceView } from './MarketplaceView';
+import { PluginMarketView } from './MarketplaceView';
 
 /** 能力面板 - 插件 Tab：声明式能力包的安装 / 启停 / 卸载（PLUGIN_DESIGN 第 3 节） */
 export function PluginsTab() {
@@ -148,7 +148,7 @@ export function PluginsTab() {
         style={{ marginBottom: 12 }}
       />
       {view === 'market' ? (
-        <MarketplaceView />
+        <PluginMarketView />
       ) : (
         <>
           <Alert

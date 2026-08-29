@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Switch, Table, Tag, Tooltip } from 'antd';
+import { Alert, Button, Segmented, Switch, Table, Tag, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import type { SkillDTO } from '../../types';
@@ -8,6 +8,7 @@ import { useProjectStore } from '../../stores/projectStore';
 import { confirmDanger, toast } from '../../utils/feedback';
 import { Empty } from '../common/Empty';
 import { SkillFormModal } from './SkillFormModal';
+import { SkillMarketView } from './MarketplaceView';
 
 /** 能力面板 - 技能 Tab：列表（名称/描述/来源/启用）+ 新增/编辑/删除 */
 export function SkillsTab() {
@@ -21,6 +22,8 @@ export function SkillsTab() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<SkillDTO | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  /** 已安装 / 市场 视图切换 */
+  const [view, setView] = useState<'installed' | 'market'>('installed');
 
   // 面板打开时按当前项目加载（无项目只列全局）
   useEffect(() => {
@@ -145,6 +148,19 @@ export function SkillsTab() {
 
   return (
     <div>
+      <Segmented
+        value={view}
+        onChange={(v) => setView(v as 'installed' | 'market')}
+        options={[
+          { label: '已安装', value: 'installed' },
+          { label: '市场', value: 'market' },
+        ]}
+        style={{ marginBottom: 12 }}
+      />
+      {view === 'market' ? (
+        <SkillMarketView />
+      ) : (
+        <>
       <Alert
         type="info"
         showIcon
@@ -173,6 +189,8 @@ export function SkillsTab() {
         pagination={false}
       />
       <SkillFormModal open={formOpen} editing={editing} onClose={() => setFormOpen(false)} />
+        </>
+      )}
     </div>
   );
 }
