@@ -6,6 +6,7 @@ use crate::application::config_service::{
     DeleteMcpCmd, DeleteModelCmd, DeletePermRuleCmd, McpServerBO, ModelBO, PermRuleBO, SaveMcpCmd,
     SaveModelCmd, SavePermRuleCmd, SetDefaultModelCmd, ToggleMcpCmd,
 };
+use crate::infra::db::fmt_time;
 
 /// save_model 请求
 #[derive(Debug, Deserialize)]
@@ -89,6 +90,8 @@ pub struct ModelDTO {
     pub is_default: bool,
     /// 状态
     pub status: String,
+    /// 删除时间（未删除为 null）
+    pub deleted_at: Option<String>,
 }
 
 impl From<ModelBO> for ModelDTO {
@@ -102,6 +105,7 @@ impl From<ModelBO> for ModelDTO {
             context_window: bo.context_window,
             is_default: bo.is_default,
             status: bo.status,
+            deleted_at: bo.deleted_at.as_ref().map(fmt_time),
         }
     }
 }
@@ -177,6 +181,8 @@ pub struct McpServerDTO {
     pub tools: i64,
     /// 最近失败原因
     pub last_error: Option<String>,
+    /// 删除时间（未删除为 null）
+    pub deleted_at: Option<String>,
 }
 
 impl From<McpServerBO> for McpServerDTO {
@@ -188,6 +194,7 @@ impl From<McpServerBO> for McpServerDTO {
             status: bo.status,
             tools: bo.tools,
             last_error: bo.last_error,
+            deleted_at: bo.deleted_at.as_ref().map(fmt_time),
         }
     }
 }
@@ -323,6 +330,8 @@ pub struct PermRuleDTO {
     pub action: String,
     /// 匹配顺序
     pub sort: i64,
+    /// 删除时间（未删除为 null）
+    pub deleted_at: Option<String>,
 }
 
 impl From<PermRuleBO> for PermRuleDTO {
@@ -336,6 +345,7 @@ impl From<PermRuleBO> for PermRuleDTO {
             pattern: bo.pattern,
             action: bo.action,
             sort: bo.sort,
+            deleted_at: bo.deleted_at.as_ref().map(fmt_time),
         }
     }
 }

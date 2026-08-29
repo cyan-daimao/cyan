@@ -126,7 +126,13 @@ export function PermRuleFormModal({ open, editing, allowScopes, onClose, onSaved
           label="匹配模式（glob）"
           rules={[{ required: true, message: '请输入匹配模式' }]}
         >
-          <Input className="mono" placeholder="例如 git push * 或 src/**/*.ts" />
+          <Input
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="mono"
+            placeholder="例如 git push * 或 src/**/*.ts"
+          />
         </Form.Item>
         <Form.Item name="action" label="动作" rules={[{ required: true }]}>
           <Select options={ACTION_OPTIONS} />

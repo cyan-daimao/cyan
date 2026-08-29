@@ -149,6 +149,8 @@ export interface ProjectDTO {
   path: string;
   /** 最近打开时间（YYYY-MM-DD HH:MM:SS） */
   lastOpenedAt?: string;
+  /** 删除时间（回收站用；未删除为 null） */
+  deletedAt?: string | null;
 }
 
 /** 模型 DTO（API Key 已脱敏为 maskedKey） */
@@ -161,6 +163,8 @@ export interface ModelDTO {
   contextWindow: number;
   isDefault: boolean;
   status: ModelStatus;
+  /** 删除时间（回收站用；未删除为 null） */
+  deletedAt?: string | null;
 }
 
 /** 保存模型请求：id 编辑时携带；apiKey 空/缺省表示不修改 */
@@ -183,6 +187,8 @@ export interface McpServerDTO {
   /** 握手发现的工具数；非 connected 前端展示 — */
   tools: number;
   lastError?: string;
+  /** 删除时间（回收站用；未删除为 null） */
+  deletedAt?: string | null;
 }
 
 /** 权限规则作用域 */
@@ -202,6 +208,8 @@ export interface PermRuleDTO {
   action: PermAction;
   /** 匹配顺序（自上而下） */
   sort: number;
+  /** 删除时间（回收站用；未删除为 null） */
+  deletedAt?: string | null;
 }
 
 /** 文件树节点 DTO（file_dto.rs：name / path / isDir / children） */
@@ -330,6 +338,8 @@ export interface PluginDTO {
   backendRunning: boolean;
   /** sidecar 后端端口（cyan 分配；无 backend 声明为 null） */
   backendPort: number | null;
+  /** 删除时间（回收站用；未删除为 null） */
+  deletedAt?: string | null;
 }
 
 /* ============================================================
@@ -363,4 +373,38 @@ export interface McpMarketItemDTO {
   command: string | null;
   source: 'featured' | 'registry';
   homepage: string | null;
+}
+
+/* ============================================================
+ * 回收站（全对象）
+ * ============================================================ */
+
+/** 回收站对象种类 */
+export type RecycleKind =
+  | 'session'
+  | 'project'
+  | 'model'
+  | 'mcp'
+  | 'plugin'
+  | 'permRule'
+  | 'skill';
+
+/** 回收站技能条目（后端可选提供） */
+export interface RecycleSkillDTO {
+  id: string;
+  name: string;
+  scope: SkillScope;
+  fileName: string;
+  deletedAt?: string | null;
+}
+
+/** 回收站全对象列表 DTO */
+export interface RecycleBinDTO {
+  sessions: SessionDTO[];
+  projects: ProjectDTO[];
+  models: ModelDTO[];
+  mcpServers: McpServerDTO[];
+  plugins: PluginDTO[];
+  permRules: PermRuleDTO[];
+  skills?: RecycleSkillDTO[];
 }

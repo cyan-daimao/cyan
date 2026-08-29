@@ -185,6 +185,7 @@ mod tests {
             plugin_origin: None,
             created_at: NaiveDateTime::default(),
             updated_at: NaiveDateTime::default(),
+            deleted_at: None,
         }
     }
 

@@ -23,7 +23,9 @@ pub async fn init_pool() -> anyhow::Result<SqlitePool> {
     let path = db_path()?;
     let options = SqliteConnectOptions::new()
         .filename(&path)
-        .create_if_missing(true);
+        .create_if_missing(true)
+        // 显式启用外键约束：recycle.rs 的孤儿级联处理依赖此开启
+        .foreign_keys(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(8)
         .connect_with(options)

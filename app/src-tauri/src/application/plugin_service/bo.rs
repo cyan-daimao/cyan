@@ -59,6 +59,8 @@ pub struct PluginBO {
     pub backend_port: Option<u16>,
     /// 安装时间
     pub installed_at: NaiveDateTime,
+    /// 软删时间（未删除为 None）
+    pub deleted_at: Option<NaiveDateTime>,
 }
 
 impl From<Plugin> for PluginBO {
@@ -76,6 +78,7 @@ impl From<Plugin> for PluginBO {
             backend_running: false,
             backend_port: None,
             installed_at: p.created_at,
+            deleted_at: p.deleted_at,
         }
     }
 }

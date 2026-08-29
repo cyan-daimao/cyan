@@ -118,6 +118,9 @@ export function ModelsTab() {
           placeholder="搜索名称 / Provider…"
           value={kw}
           allowClear
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           onChange={(e) => {
             setKw(e.target.value);
             setPage(1);

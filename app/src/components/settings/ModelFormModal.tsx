@@ -149,7 +149,12 @@ export function ModelFormModal({ open, editing, onClose }: ModelFormModalProps) 
             },
           ]}
         >
-          <Input placeholder="例如 kimi-k2.5" />
+          <Input
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="例如 kimi-k2.5"
+          />
         </Form.Item>
         <Form.Item
           name="provider"
@@ -171,7 +176,13 @@ export function ModelFormModal({ open, editing, onClose }: ModelFormModalProps) 
             { pattern: /^https?:\/\//, message: '请输入合法的 http(s) 地址' },
           ]}
         >
-          <Input className="mono" placeholder="https://api.example.com/v1" />
+          <Input
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="mono"
+            placeholder="https://api.example.com/v1"
+          />
         </Form.Item>
         <Form.Item
           name="apiKey"
@@ -179,6 +190,9 @@ export function ModelFormModal({ open, editing, onClose }: ModelFormModalProps) 
           rules={isEdit ? [] : [{ required: true, message: '请输入 API Key' }]}
         >
           <Input.Password
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             className="mono"
             placeholder={editing ? `留空表示不修改（当前 ${editing.maskedKey}）` : 'sk-...'}
           />

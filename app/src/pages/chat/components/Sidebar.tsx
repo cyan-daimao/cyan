@@ -18,12 +18,12 @@ import {
 import logoUrl from '../../../assets/logo.png';
 import { RecycleBinModal } from '../../../components/recycle/RecycleBinModal';
 import { SessionItem } from '../../../components/session/SessionItem';
-import { listSessions, deleteSession } from '../../../services/session';
+import { listSessions, deleteSession, renameSession as renameSessionApi } from '../../../services/session';
 import { useSessionStore } from '../../../stores/sessionStore';
 import { useProjectStore } from '../../../stores/projectStore';
 import { useAgentStore } from '../../../stores/agentStore';
 import { useConfigStore } from '../../../stores/configStore';
-import { confirmDanger, toast } from '../../../utils/feedback';
+import { confirmDanger, errText, toast } from '../../../utils/feedback';
 import type { PermMode, SessionSummaryDTO } from '../../../types';
 
 /** 侧栏底部权限模式提示文案 */
@@ -63,6 +63,7 @@ export function Sidebar({
   const searchKw = useSessionStore((s) => s.searchKw);
   const setSearchKw = useSessionStore((s) => s.setSearchKw);
   const loadSessions = useSessionStore((s) => s.loadSessions);
+  const renameSessionInStore = useSessionStore((s) => s.renameSession);
   const sessionRuns = useAgentStore((s) => s.sessionRuns);
   const project = useProjectStore((s) => s.current);
   const recents = useProjectStore((s) => s.recents);
@@ -114,6 +115,25 @@ export function Sidebar({
       if (!otherSessions[path]) fetchOther(path);
       void openProject(path);
     }
+  };
+
+  /** 重命名：当前项目走 store action；其他项目本地同步缓存（store 只持有当前项目） */
+  const onRenameSession = async (path: string, id: number, title: string) => {
+    if (path === project?.path) {
+      return renameSessionInStore(id, title);
+    }
+    // 其他项目：先写后端，再本地同步缓存（不刷新整列避免误改用户搜索状态）
+    try {
+      await renameSessionApi(id, title);
+    } catch (e) {
+      toast.error(`重命名失败：${errText(e)}`);
+      return false;
+    }
+    setOtherSessions((m) => ({
+      ...m,
+      [path]: (m[path] ?? []).map((s) => (s.id === id ? { ...s, title } : s)),
+    }));
+    return true;
   };
 
   /** 二级菜单点击：选中会话；跨项目时先切换项目再打开会话 */
@@ -223,6 +243,9 @@ export function Sidebar({
           placeholder="搜索会话…"
           value={searchKw}
           allowClear
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           onChange={(e) => setSearchKw(e.target.value)}
         />
       </div>
@@ -284,6 +307,7 @@ export function Sidebar({
                           runFlag={sessionRuns[s.id]}
                           onSelect={(id) => onTreeSelectSession(p.path, id)}
                           onDelete={(id) => onTreeDeleteSession(p.path, id)}
+                          onRename={(id, title) => onRenameSession(p.path, id, title)}
                         />
                       ))
                     )}

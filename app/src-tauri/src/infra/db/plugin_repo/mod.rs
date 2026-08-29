@@ -5,7 +5,7 @@ use sqlx::{FromRow, SqlitePool};
 
 use crate::domain::plugin::{Plugin, PluginRepository, PluginStatus};
 
-use super::{fmt_time, now_local, parse_time};
+use super::{fmt_time, now_local, parse_time, parse_time_opt};
 
 /// 插件表行（cyan_plugin）
 #[derive(Debug, FromRow)]
@@ -56,6 +56,7 @@ impl TryFrom<PluginDO> for Plugin {
             rule_count: d.rule_count,
             created_at: parse_time(&d.created_at)?,
             updated_at: parse_time(&d.updated_at)?,
+            deleted_at: parse_time_opt(&d.deleted_at)?,
         })
     }
 }
@@ -162,6 +163,27 @@ impl PluginRepository for PluginRepositoryImpl {
              WHERE id = ? AND deleted_at IS NULL",
         )
         .bind(fmt_time(&now_local()))
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_deleted(&self) -> anyhow::Result<Vec<Plugin>> {
+        let rows = sqlx::query_as::<_, PluginDO>(&format!(
+            "SELECT {SELECT_COLS} FROM cyan_plugin WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Plugin::try_from).collect()
+    }
+
+    async fn restore(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_plugin SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NOT NULL",
+        )
         .bind(fmt_time(&now_local()))
         .bind(id)
         .execute(&self.pool)

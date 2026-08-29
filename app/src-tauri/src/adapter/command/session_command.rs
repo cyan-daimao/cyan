@@ -7,8 +7,8 @@ use tauri::State;
 
 use crate::adapter::dto::{
     CreateSessionRequest, DeleteSessionRequest, EditMessageRequest, GetSessionRequest,
-    ListSessionRequest, ProjectTokenUsageDTO, ProjectTokenUsageRequest, RestoreSessionRequest,
-    SessionDTO, SessionSummaryDTO, SetSessionModelRequest,
+    ListSessionRequest, ProjectTokenUsageDTO, ProjectTokenUsageRequest, RenameSessionRequest,
+    RestoreSessionRequest, SessionDTO, SessionSummaryDTO, SetSessionModelRequest,
 };
 use crate::application::session_service::SessionService;
 use crate::error::ServiceError;
@@ -105,4 +105,13 @@ pub async fn set_session_model(
     request: SetSessionModelRequest,
 ) -> Result<(), ServiceError> {
     svc.set_session_model(request.into()).await
+}
+
+/// 重命名会话（trim 后 1..=80 字符；幂等：同值不写盘）
+#[tauri::command]
+pub async fn rename_session(
+    svc: State<'_, Arc<dyn SessionService>>,
+    request: RenameSessionRequest,
+) -> Result<(), ServiceError> {
+    svc.rename_session(request.into()).await
 }

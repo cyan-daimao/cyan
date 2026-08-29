@@ -61,6 +61,12 @@ pub trait CheckpointRepository: Send + Sync {
     async fn list_by_session(&self, session_id: i64) -> anyhow::Result<Vec<Checkpoint>>;
     /// 标记已回滚
     async fn mark_rolled_back(&self, id: i64) -> anyhow::Result<()>;
+    /// 软删会话全部 checkpoint（项目级联移除用）
+    async fn soft_delete_by_session(&self, session_id: i64) -> anyhow::Result<()>;
+    /// 窗口级联软删：项目下所有会话的 checkpoint（统一 deleted_at 时间戳）
+    async fn soft_delete_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()>;
+    /// 窗口级联恢复：仅还原 deleted_at == 窗口时间戳的 checkpoint
+    async fn restore_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()>;
 }
 
 /// checkpoint 回滚端口（infra/git 实现）

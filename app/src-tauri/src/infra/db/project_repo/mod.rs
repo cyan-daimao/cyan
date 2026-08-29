@@ -41,6 +41,7 @@ impl TryFrom<ProjectDO> for Project {
             last_opened_at: parse_time_opt(&d.last_opened_at)?,
             created_at: parse_time(&d.created_at)?,
             updated_at: parse_time(&d.updated_at)?,
+            deleted_at: parse_time_opt(&d.deleted_at)?,
         })
     }
 }
@@ -134,11 +135,15 @@ impl ProjectRepository for ProjectRepositoryImpl {
     }
 
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()> {
+        self.soft_delete_with(id, &fmt_time(&now_local())).await
+    }
+
+    async fn soft_delete_with(&self, id: i64, deleted_at: &str) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE cyan_project SET deleted_at = ?, updated_by = 'local', updated_at = ?
              WHERE id = ? AND deleted_at IS NULL",
         )
-        .bind(fmt_time(&now_local()))
+        .bind(deleted_at)
         .bind(fmt_time(&now_local()))
         .bind(id)
         .execute(&self.pool)
@@ -155,5 +160,27 @@ impl ProjectRepository for ProjectRepositoryImpl {
         .fetch_optional(&self.pool)
         .await?;
         row.map(Project::try_from).transpose()
+    }
+
+    async fn list_deleted(&self) -> anyhow::Result<Vec<Project>> {
+        let rows = sqlx::query_as::<_, ProjectDO>(
+            "SELECT id, name, path, last_opened_at, created_by, updated_by, created_at, updated_at, deleted_at
+             FROM cyan_project WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Project::try_from).collect()
+    }
+
+    async fn restore(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_project SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NOT NULL",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }

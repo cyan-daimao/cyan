@@ -262,6 +262,50 @@ impl SessionRepository for SessionRepositoryImpl {
         .await?;
         Ok(())
     }
+
+    async fn soft_delete_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_session SET deleted_at = ?, updated_by = 'local', updated_at = ?
+             WHERE project_id = ? AND deleted_at IS NULL",
+        )
+        .bind(deleted_at)
+        .bind(fmt_time(&now_local()))
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn restore_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_session SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE project_id = ? AND deleted_at = ?",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(project_id)
+        .bind(deleted_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_title(&self, id: i64, title: &str) -> anyhow::Result<()> {
+        let rows = sqlx::query(
+            "UPDATE cyan_session SET title = ?, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(title)
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if rows == 0 {
+            // 软删或不存在：与 find_by_id 行为一致由 service 层翻译为 not_found
+            return Err(anyhow::anyhow!("会话不存在：{id}"));
+        }
+        Ok(())
+    }
 }
 
 /// 消息仓储 SQLx 实现
@@ -372,6 +416,32 @@ impl MessageRepository for MessageRepositoryImpl {
             .await?
             .rows_affected();
         Ok(rows)
+    }
+
+    async fn soft_delete_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_message SET deleted_at = ?, updated_by = 'local', updated_at = ?
+             WHERE deleted_at IS NULL AND session_id IN (SELECT id FROM cyan_session WHERE project_id = ?)",
+        )
+        .bind(deleted_at)
+        .bind(fmt_time(&now_local()))
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn restore_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_message SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE deleted_at = ? AND session_id IN (SELECT id FROM cyan_session WHERE project_id = ?)",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(deleted_at)
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 

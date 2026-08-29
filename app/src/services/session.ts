@@ -1,5 +1,11 @@
 import { call } from './invoke';
-import type { ProjectTokenUsageDTO, SessionDTO, SessionSummaryDTO } from '../types';
+import type {
+  ProjectTokenUsageDTO,
+  RecycleBinDTO,
+  RecycleKind,
+  SessionDTO,
+  SessionSummaryDTO,
+} from '../types';
 
 /** 会话相关命令（参数与 src-tauri session_command.rs / session_dto.rs 一致） */
 
@@ -35,9 +41,20 @@ export const restoreSession = (id: number) =>
 /** 清空回收站（硬删），返回清理行数 */
 export const purgeRecycleBin = () => call<number>('purge_recycle_bin');
 
+/** 回收站全对象列表（会话/项目/模型/MCP/插件/规则/技能） */
+export const listRecycleBin = () => call<RecycleBinDTO>('list_recycle_bin');
+
+/** 恢复回收站条目；恢复项目会带回随删会话，恢复会话在项目已删时连带恢复项目 */
+export const restoreRecycleItem = (kind: RecycleKind, id: number | string) =>
+  call<void>('restore_recycle_item', { request: { kind, id } });
+
 /**
  * 行内编辑消息：更新 payload 文本 + 物理删除其后所有消息，返回完整会话。
  * （编辑即截断重发语义）
  */
 export const editMessage = (id: number, text: string) =>
   call<SessionDTO>('edit_message', { request: { id, text } });
+
+/** 重命名会话标题（trim 后 1..=80 字符；幂等） */
+export const renameSession = (id: number, title: string) =>
+  call<void>('rename_session', { request: { id, title } });

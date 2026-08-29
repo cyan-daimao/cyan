@@ -112,17 +112,34 @@ export function SkillFormModal({ open, editing, onClose }: SkillFormModalProps) 
             },
           ]}
         >
-          <Input className="mono" placeholder="例如 weekly-report" disabled={isEdit} />
+          <Input
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="mono"
+            placeholder="例如 weekly-report"
+            disabled={isEdit}
+          />
         </Form.Item>
         <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-          <Input placeholder="例如 周报" />
+          <Input
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="例如 周报"
+          />
         </Form.Item>
         <Form.Item
           name="description"
           label="描述"
           rules={[{ required: true, message: '请输入描述' }]}
         >
-          <Input placeholder="一句话说明这个技能做什么" />
+          <Input
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="一句话说明这个技能做什么"
+          />
         </Form.Item>
         <Form.Item
           name="content"
@@ -130,6 +147,9 @@ export function SkillFormModal({ open, editing, onClose }: SkillFormModalProps) 
           rules={[{ required: true, message: '请输入正文' }]}
         >
           <Input.TextArea
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             className="mono"
             rows={8}
             placeholder="支持 $ARGUMENTS 占位符，用户输入的参数将原样替换"

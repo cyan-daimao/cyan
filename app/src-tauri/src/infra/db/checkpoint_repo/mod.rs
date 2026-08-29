@@ -128,4 +128,43 @@ impl CheckpointRepository for CheckpointRepositoryImpl {
         .await?;
         Ok(())
     }
+
+    async fn soft_delete_by_session(&self, session_id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_checkpoint SET deleted_at = ?, updated_by = 'local', updated_at = ?
+             WHERE session_id = ? AND deleted_at IS NULL",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(fmt_time(&now_local()))
+        .bind(session_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn soft_delete_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_checkpoint SET deleted_at = ?, updated_by = 'local', updated_at = ?
+             WHERE deleted_at IS NULL AND session_id IN (SELECT id FROM cyan_session WHERE project_id = ?)",
+        )
+        .bind(deleted_at)
+        .bind(fmt_time(&now_local()))
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn restore_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_checkpoint SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE deleted_at = ? AND session_id IN (SELECT id FROM cyan_session WHERE project_id = ?)",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(deleted_at)
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }

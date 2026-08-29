@@ -401,6 +401,75 @@ pre {
   background: rgba(244, 63, 94, 0.08);
 }
 
+/* 重命名按钮（与 s-del 同级、仅悬停可见） */
+.session-item .s-edit {
+  visibility: hidden;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.session-item:hover .s-edit {
+  visibility: visible;
+}
+
+.session-item .s-edit:hover {
+  color: var(--brand);
+  background: var(--brand-tint);
+}
+
+/* 行内重命名 input（与 s-title 等高） */
+.session-item.editing {
+  padding: 4px 10px;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.session-item.editing:hover {
+  background: #fff;
+}
+
+.s-rename-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(0, 179, 158, 0.5);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: #fff;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 179, 158, 0.1);
+}
+
+.s-rename-input:focus {
+  border-color: var(--brand);
+}
+
+.s-saving {
+  color: var(--text-3);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+[data-theme='dark'] .session-item.editing {
+  background: var(--bg-elev);
+}
+[data-theme='dark'] .session-item.editing:hover {
+  background: var(--bg-elev);
+}
+[data-theme='dark'] .s-rename-input {
+  background: #14161a;
+  color: var(--text);
+}
+
 .session-empty {
   padding: 24px 12px;
   font-size: 13px;

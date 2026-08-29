@@ -123,6 +123,8 @@ interface SessionState {
   openSession: (sessionId: number) => Promise<SessionDTO | null>;
   createSession: (projectPath: string) => Promise<number | null>;
   deleteSession: (sessionId: number) => Promise<void>;
+  /** 重命名会话标题（同步刷新 sessions 列表；otherSessions 缓存由调用方同步） */
+  renameSession: (sessionId: number, title: string) => Promise<boolean>;
   /** 项目切换时清空会话上下文 */
   resetForProject: () => void;
 
@@ -218,6 +220,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (e) {
       toast.error(`删除会话失败：${errText(e)}`);
       throw e;
+    }
+  },
+
+  renameSession: async (sessionId, title) => {
+    const next = title.trim();
+    if (!next) {
+      toast.warning('标题不能为空');
+      return false;
+    }
+    if (next.length > 80) {
+      toast.warning('标题长度不能超过 80 字符');
+      return false;
+    }
+    const before = get().sessions.find((s) => s.id === sessionId);
+    // 幂等：与原标题一致（含 trim）跳过网络
+    if (before && before.title.trim() === next) return true;
+    try {
+      await sessionApi.renameSession(sessionId, next);
+      // 本地同步：避免 reload 整个项目列表
+      set({
+        sessions: get().sessions.map((s) =>
+          s.id === sessionId
+            ? { ...s, title: next, updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19) }
+            : s,
+        ),
+      });
+      return true;
+    } catch (e) {
+      toast.error(`重命名失败：${errText(e)}`);
+      return false;
     }
   },
 

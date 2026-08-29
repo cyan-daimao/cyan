@@ -4,5 +4,6 @@ pub mod agent_service;
 pub mod config_service;
 pub mod plugin_service;
 pub mod project_service;
+pub mod recycle_service;
 pub mod session_service;
 pub mod skill_service;

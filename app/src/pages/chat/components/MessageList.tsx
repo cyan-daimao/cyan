@@ -99,8 +99,14 @@ function MessageNode({ node, index, total }: MessageNodeProps) {
         value={editText}
         autoFocus
         rows={Math.min(10, Math.max(2, editText.split('\n').length + 1))}
+        // 中文 IME 下关掉 WebKit 自动首字母大写/纠错
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
         onChange={(e) => setEditText(e.target.value)}
         onKeyDown={(e) => {
+          // Esc 取消时避开 IME 组合中（避免中文候选按 Esc 误关编辑态）
+          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
           if (e.key === 'Escape') {
             e.stopPropagation();
             setEditing(false);

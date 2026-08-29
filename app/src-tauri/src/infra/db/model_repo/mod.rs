@@ -5,7 +5,7 @@ use sqlx::{FromRow, SqlitePool};
 
 use crate::domain::config::{ModelConfig, ModelRepository, ModelStatus};
 
-use super::{fmt_time, now_local, parse_time};
+use super::{fmt_time, now_local, parse_time, parse_time_opt};
 
 /// 模型配置表行（cyan_model_config）
 #[derive(Debug, FromRow)]
@@ -53,6 +53,7 @@ impl TryFrom<ModelDO> for ModelConfig {
             status: ModelStatus::parse(&d.status),
             created_at: parse_time(&d.created_at)?,
             updated_at: parse_time(&d.updated_at)?,
+            deleted_at: parse_time_opt(&d.deleted_at)?,
         })
     }
 }
@@ -178,6 +179,27 @@ impl ModelRepository for ModelRepositoryImpl {
              WHERE deleted_at IS NULL AND is_default = 1",
         )
         .bind(fmt_time(&now_local()))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_deleted(&self) -> anyhow::Result<Vec<ModelConfig>> {
+        let rows = sqlx::query_as::<_, ModelDO>(&format!(
+            "SELECT {SELECT_COLS} FROM cyan_model_config WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(ModelConfig::try_from).collect()
+    }
+
+    async fn restore(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_model_config SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NOT NULL",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(id)
         .execute(&self.pool)
         .await?;
         Ok(())

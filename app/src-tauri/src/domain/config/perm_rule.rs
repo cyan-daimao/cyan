@@ -91,6 +91,8 @@ pub struct PermissionRule {
     pub created_at: NaiveDateTime,
     /// 更新时间
     pub updated_at: NaiveDateTime,
+    /// 软删时间（未删除为 None，回收站展示用）
+    pub deleted_at: Option<NaiveDateTime>,
 }
 
 impl PermissionRule {
@@ -152,6 +154,7 @@ impl PermissionRule {
             plugin_origin: None,
             created_at: now,
             updated_at: now,
+            deleted_at: None,
         }
     }
 }
@@ -198,6 +201,7 @@ mod tests {
             plugin_origin: None,
             created_at: now,
             updated_at: now,
+            deleted_at: None,
         };
         assert!(r.matches("Read", "docs/a.md"));
         assert!(r.matches("Edit", "docs/a.md"));

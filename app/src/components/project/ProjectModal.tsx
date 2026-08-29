@@ -150,7 +150,12 @@ export function ProjectModal({ open, onClose }: ProjectModalProps) {
                     },
                   ]}
                 >
-                  <Input placeholder="例如 my-new-app" />
+                  <Input
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    placeholder="例如 my-new-app"
+                  />
                 </Form.Item>
                 <Form.Item
                   name="parent"
@@ -161,6 +166,9 @@ export function ProjectModal({ open, onClose }: ProjectModalProps) {
                   ]}
                 >
                   <Input
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
                     className="mono"
                     readOnly
                     placeholder="点击右侧按钮选择文件夹"

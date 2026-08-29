@@ -16,6 +16,8 @@ pub struct ProjectBO {
     pub path: String,
     /// 最近打开时间
     pub last_opened_at: Option<NaiveDateTime>,
+    /// 软删时间（未删除为 None，回收站展示用）
+    pub deleted_at: Option<NaiveDateTime>,
 }
 
 impl From<Project> for ProjectBO {
@@ -25,6 +27,7 @@ impl From<Project> for ProjectBO {
             name: p.name,
             path: p.path,
             last_opened_at: p.last_opened_at,
+            deleted_at: p.deleted_at,
         }
     }
 }

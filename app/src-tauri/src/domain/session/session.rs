@@ -112,6 +112,25 @@ impl Session {
         self.output_tokens += output;
         self.ctx_percent = ctx_percent.clamp(0, 100);
     }
+
+    /// 重命名会话：trim 后 1..=80 字符，长度越界/空串报错；
+    /// 同值（trim 后相等）跳过不变更 updated_at（幂等）。
+    pub fn rename_title(&mut self, title: &str, now: NaiveDateTime) -> Result<(), String> {
+        let trimmed = title.trim();
+        let len = trimmed.chars().count();
+        if len == 0 {
+            return Err("标题不能为空".to_string());
+        }
+        if len > 80 {
+            return Err("标题长度不能超过 80 字符".to_string());
+        }
+        if self.title == trimmed {
+            return Ok(());
+        }
+        self.title = trimmed.to_string();
+        self.updated_at = now;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

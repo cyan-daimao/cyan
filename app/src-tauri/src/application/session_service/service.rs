@@ -14,8 +14,8 @@ use crate::infra::db::now_local;
 
 use super::{
     AppendMessageCmd, CreateSessionCmd, DeleteSessionCmd, EditMessageCmd, GetSessionQuery,
-    ListSessionQuery, MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, RestoreSessionCmd,
-    SessionBO, SessionSummaryBO, SetSessionModelCmd,
+    ListSessionQuery, MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, RenameSessionCmd,
+    RestoreSessionCmd, SessionBO, SessionSummaryBO, SetSessionModelCmd,
 };
 
 /// 会话服务
@@ -46,6 +46,8 @@ pub trait SessionService: Send + Sync {
     async fn edit_message(&self, cmd: EditMessageCmd) -> Result<SessionBO, ServiceError>;
     /// 设置会话级模型偏好（空串 = 清除跟随全局；幂等）
     async fn set_session_model(&self, cmd: SetSessionModelCmd) -> Result<(), ServiceError>;
+    /// 重命名会话（trim 后 1..=80 字符；幂等：同值不写盘）
+    async fn rename_session(&self, cmd: RenameSessionCmd) -> Result<(), ServiceError>;
 }
 
 /// 会话服务实现
@@ -229,6 +231,23 @@ impl SessionService for SessionServiceImpl {
         self.session_repo
             .set_preferred_model(cmd.session_id, preference)
             .await?;
+        Ok(())
+    }
+
+    async fn rename_session(&self, cmd: RenameSessionCmd) -> Result<(), ServiceError> {
+        let mut session = self
+            .session_repo
+            .find_by_id(cmd.id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found(format!("会话不存在：{}", cmd.id)))?;
+        // domain 校验：空/超长 → validation；同值不写盘（幂等）
+        session
+            .rename_title(&cmd.title, now_local())
+            .map_err(ServiceError::validation)?;
+        // 复用 update 写盘（updated_at 已在 rename_title 内刷新到 now）
+        // 但 update 自己也会写一次 updated_at（now_local 二次取值）— 与重命名语义一致，可接受
+        self.session_repo.update(&session).await?;
+        tracing::info!(session_id = session.id, title = %session.title, "会话已重命名");
         Ok(())
     }
 }

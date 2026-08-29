@@ -39,6 +39,15 @@ pub struct SetSessionModelCmd {
     pub model: String,
 }
 
+/// 重命名会话命令
+#[derive(Debug, Clone)]
+pub struct RenameSessionCmd {
+    /// 会话 id
+    pub id: i64,
+    /// 新标题（trim 后 1..=80 字符）
+    pub title: String,
+}
+
 /// 追加消息命令（AgentService 内部复用）
 #[derive(Debug, Clone)]
 pub struct AppendMessageCmd {

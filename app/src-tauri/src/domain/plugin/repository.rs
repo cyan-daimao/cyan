@@ -19,4 +19,8 @@ pub trait PluginRepository: Send + Sync {
     async fn update(&self, plugin: &Plugin) -> anyhow::Result<()>;
     /// 软删除
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
+    /// 回收站：软删插件列表（deleted_at 非空）
+    async fn list_deleted(&self) -> anyhow::Result<Vec<Plugin>>;
+    /// 恢复软删插件（清 deleted_at，幂等；保持 disabled 待用户手动启用）
+    async fn restore(&self, id: i64) -> anyhow::Result<()>;
 }

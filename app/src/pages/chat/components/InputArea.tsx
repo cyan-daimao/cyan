@@ -1,5 +1,5 @@
 import type { KeyboardEvent, RefObject } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Segmented, Select, Tag, Tooltip } from 'antd';
 import {
   ArrowUpOutlined,
@@ -77,6 +77,9 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
     null;
   const [permsOpen, setPermsOpen] = useState(false);
 
+  /* ---- IME 防护：记录最近一次 compositionend 时间，onKeyDown 用它放宽 Enter 判定 ---- */
+  const lastComposeEndRef = useRef(0);
+
   /* ---- `/` 技能补全（PLUGIN_DESIGN 2.3） ---- */
   const project = useProjectStore((s) => s.current);
   const skills = useSkillStore((s) => s.skills);
@@ -128,6 +131,12 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 输入法组合中（拼音候选未上屏）：按键交给 IME，不触发发送/补全/中断
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    // 中文 IME 刚上屏的下一帧（compositionend 后的几十毫秒），WebKit 仍可能把后续
+    // 按键当成"句首"并自动大写或插入多余空格；这段时间内 Enter 只换行不发送。
+    if (Date.now() - lastComposeEndRef.current < 200 && e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      return;
+    }
     // 技能补全打开时：上下键移动、Enter 选中、Esc 关闭（不触发发送/中断）
     if (suggestOpen) {
       if (e.key === 'ArrowDown') {
@@ -249,8 +258,18 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
             rows={2}
             placeholder="描述你要完成的任务，例如：帮我修复登录页的超时 bug…"
             value={draft}
+            // 中文 IME 下 WebKit 会自动首字母大写、插入自动空格；显式关掉
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             onChange={(e) => onDraftChangeWrap(e.target.value)}
             onKeyDown={onKeyDown}
+            onCompositionEnd={(e) => {
+              lastComposeEndRef.current = Date.now();
+              // compositionend 之后再 normalize 一次，防止拼音候选上屏后残留首字母大写/多余空格
+              const next = (e.currentTarget.value || '').replace(/^\s+|\s+$/g, '');
+              if (next !== e.currentTarget.value) onDraftChangeWrap(next);
+            }}
           />
           <div className="input-toolbar">
             <button

@@ -333,6 +333,7 @@ impl ConfigService for ConfigServiceImpl {
                         plugin_origin: None,
                         created_at: now,
                         updated_at: now,
+                        deleted_at: None,
                     },
                 }
             }

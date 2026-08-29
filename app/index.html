@@ -3,6 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      全局关闭 WebKit 自动首字母大写 / 自动纠正 / 拼写检查。
+      Tauri WebView 在 macOS / iOS 上的中文 IME 经常把这些特性默认开，
+      导致输入拼音后切英文出现"首字母大写 + 残留空格"的问题。
+      具体输入框仍可自行覆盖。
+    -->
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="x-apple-grammarly" content="false" />
+    <style>
+      input, textarea, [contenteditable] {
+        -webkit-auto-capitalize: none;
+        -webkit-autocapitalize: none;
+        autocapitalize: none;
+        -webkit-auto-correction: none;
+        -webkit-autocorrect: none;
+        autocorrect: off;
+        -webkit-spellcheck: false;
+        spellcheck: false;
+      }
+    </style>
     <title>cyan — AI 编程 Agent</title>
   </head>
   <body>

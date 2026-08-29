@@ -72,6 +72,8 @@ pub struct ProjectDTO {
     pub path: String,
     /// 最近打开时间
     pub last_opened_at: Option<String>,
+    /// 删除时间（未删除为 null，回收站展示用）
+    pub deleted_at: Option<String>,
 }
 
 impl From<ProjectBO> for ProjectDTO {
@@ -81,6 +83,7 @@ impl From<ProjectBO> for ProjectDTO {
             name: bo.name,
             path: bo.path,
             last_opened_at: bo.last_opened_at.as_ref().map(fmt_time),
+            deleted_at: bo.deleted_at.as_ref().map(fmt_time),
         }
     }
 }

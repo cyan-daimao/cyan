@@ -145,6 +145,8 @@ pub struct PluginDTO {
     pub backend_port: Option<u16>,
     /// 安装时间（YYYY-MM-DD HH:MM:SS）
     pub installed_at: String,
+    /// 删除时间（未删除为 null）
+    pub deleted_at: Option<String>,
 }
 
 impl From<PluginBO> for PluginDTO {
@@ -162,6 +164,7 @@ impl From<PluginBO> for PluginDTO {
             backend_running: bo.backend_running,
             backend_port: bo.backend_port,
             installed_at: fmt_time(&bo.installed_at),
+            deleted_at: bo.deleted_at.as_ref().map(fmt_time),
         }
     }
 }

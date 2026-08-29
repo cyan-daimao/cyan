@@ -21,6 +21,8 @@ pub struct ModelBO {
     pub is_default: bool,
     /// 状态（enabled/disabled）
     pub status: String,
+    /// 软删时间（未删除为 None）
+    pub deleted_at: Option<chrono::NaiveDateTime>,
 }
 
 impl ModelBO {
@@ -35,6 +37,7 @@ impl ModelBO {
             context_window: m.context_window,
             is_default: m.is_default,
             status: m.status.as_str().to_string(),
+            deleted_at: m.deleted_at,
         }
     }
 }
@@ -54,6 +57,8 @@ pub struct McpServerBO {
     pub tools: i64,
     /// 最近失败原因
     pub last_error: Option<String>,
+    /// 软删时间（未删除为 None）
+    pub deleted_at: Option<chrono::NaiveDateTime>,
 }
 
 impl From<McpServer> for McpServerBO {
@@ -65,6 +70,7 @@ impl From<McpServer> for McpServerBO {
             status: s.status.as_str().to_string(),
             tools: s.tools,
             last_error: s.last_error,
+            deleted_at: s.deleted_at,
         }
     }
 }
@@ -121,6 +127,8 @@ pub struct PermRuleBO {
     pub action: String,
     /// 匹配顺序
     pub sort: i64,
+    /// 软删时间（未删除为 None）
+    pub deleted_at: Option<chrono::NaiveDateTime>,
 }
 
 impl From<PermissionRule> for PermRuleBO {
@@ -134,6 +142,7 @@ impl From<PermissionRule> for PermRuleBO {
             pattern: r.pattern,
             action: r.action.as_str().to_string(),
             sort: r.sort,
+            deleted_at: r.deleted_at,
         }
     }
 }

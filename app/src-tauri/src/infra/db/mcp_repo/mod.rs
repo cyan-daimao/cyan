@@ -5,7 +5,7 @@ use sqlx::{FromRow, SqlitePool};
 
 use crate::domain::config::{McpRepository, McpServer, McpStatus};
 
-use super::{fmt_time, now_local, parse_time};
+use super::{fmt_time, now_local, parse_time, parse_time_opt};
 
 /// MCP 服务器表行（cyan_mcp_server）
 #[derive(Debug, FromRow)]
@@ -50,6 +50,7 @@ impl TryFrom<McpServerDO> for McpServer {
             plugin_origin: d.plugin_origin,
             created_at: parse_time(&d.created_at)?,
             updated_at: parse_time(&d.updated_at)?,
+            deleted_at: parse_time_opt(&d.deleted_at)?,
         })
     }
 }
@@ -138,6 +139,27 @@ impl McpRepository for McpRepositoryImpl {
              WHERE id = ? AND deleted_at IS NULL",
         )
         .bind(fmt_time(&now_local()))
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_deleted(&self) -> anyhow::Result<Vec<McpServer>> {
+        let rows = sqlx::query_as::<_, McpServerDO>(&format!(
+            "SELECT {SELECT_COLS} FROM cyan_mcp_server WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(McpServer::try_from).collect()
+    }
+
+    async fn restore(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_mcp_server SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NOT NULL",
+        )
         .bind(fmt_time(&now_local()))
         .bind(id)
         .execute(&self.pool)

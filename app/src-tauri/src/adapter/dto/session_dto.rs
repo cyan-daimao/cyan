@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::session_service::{
     CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery, MessageBO,
-    ProjectTokenUsageBO, ProjectTokenUsageQuery, RestoreSessionCmd, SessionBO, SessionSummaryBO,
+    ProjectTokenUsageBO, ProjectTokenUsageQuery, RenameSessionCmd, RestoreSessionCmd,
+    SessionBO, SessionSummaryBO,
 };
 use crate::infra::db::fmt_time;
 
@@ -123,6 +124,25 @@ impl From<SetSessionModelRequest> for crate::application::session_service::SetSe
         Self {
             session_id: r.session_id,
             model: r.model,
+        }
+    }
+}
+
+/// rename_session 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameSessionRequest {
+    /// 会话 id
+    pub id: i64,
+    /// 新标题（trim 后 1..=80 字符）
+    pub title: String,
+}
+
+impl From<RenameSessionRequest> for RenameSessionCmd {
+    fn from(r: RenameSessionRequest) -> Self {
+        Self {
+            id: r.id,
+            title: r.title,
         }
     }
 }

@@ -65,14 +65,26 @@ export function McpFormModal({ open, editing, onClose }: McpFormModalProps) {
             },
           ]}
         >
-          <Input placeholder="例如 github" />
+          <Input
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="例如 github"
+          />
         </Form.Item>
         <Form.Item
           name="command"
           label="启动命令"
           rules={[{ required: true, message: '请输入启动命令' }]}
         >
-          <Input.TextArea className="mono" rows={3} placeholder="npx -y @mcp/server-github" />
+          <Input.TextArea
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="mono"
+            rows={3}
+            placeholder="npx -y @mcp/server-github"
+          />
         </Form.Item>
         <Alert
           type="info"

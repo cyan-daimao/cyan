@@ -125,6 +125,7 @@ impl PluginServiceImpl {
                 plugin_origin: Some(name.to_string()),
                 created_at: now_local(),
                 updated_at: now_local(),
+                deleted_at: None,
             };
             rule.validate()?;
             match self

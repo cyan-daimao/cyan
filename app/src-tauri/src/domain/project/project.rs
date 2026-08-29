@@ -76,6 +76,8 @@ pub struct Project {
     pub created_at: NaiveDateTime,
     /// 更新时间
     pub updated_at: NaiveDateTime,
+    /// 软删时间（未删除为 None，回收站展示用）
+    pub deleted_at: Option<NaiveDateTime>,
 }
 
 impl Project {
@@ -98,6 +100,7 @@ impl Project {
             last_opened_at: Some(now),
             created_at: now,
             updated_at: now,
+            deleted_at: None,
         }
     }
 

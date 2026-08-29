@@ -6,7 +6,7 @@ use sqlx::{FromRow, SqlitePool};
 use crate::domain::config::{PermAction, PermRuleRepository, PermissionRule};
 use crate::domain::DomainError;
 
-use super::{fmt_time, now_local, parse_time};
+use super::{fmt_time, now_local, parse_time, parse_time_opt};
 
 /// 权限规则表行（cyan_permission_rule）
 #[derive(Debug, FromRow)]
@@ -56,6 +56,7 @@ impl TryFrom<PermRuleDO> for PermissionRule {
             plugin_origin: d.plugin_origin,
             created_at: parse_time(&d.created_at)?,
             updated_at: parse_time(&d.updated_at)?,
+            deleted_at: parse_time_opt(&d.deleted_at)?,
         })
     }
 }
@@ -209,6 +210,69 @@ impl PermRuleRepository for PermRuleRepositoryImpl {
         .await?;
         Ok(())
     }
+
+    async fn soft_delete_by_project(&self, project_id: i64) -> anyhow::Result<()> {
+        // 仅软删项目级规则（project_id = X，session_id IS NULL），不动全局与本项目内 session 级规则
+        sqlx::query(
+            "UPDATE cyan_permission_rule SET deleted_at = ?, updated_by = 'local', updated_at = ?
+             WHERE project_id = ? AND session_id IS NULL AND deleted_at IS NULL",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(fmt_time(&now_local()))
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn soft_delete_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()> {
+        // 窗口级联：仅项目级规则（session_id IS NULL），用统一时间戳便于同窗恢复
+        sqlx::query(
+            "UPDATE cyan_permission_rule SET deleted_at = ?, updated_by = 'local', updated_at = ?
+             WHERE project_id = ? AND session_id IS NULL AND deleted_at IS NULL",
+        )
+        .bind(deleted_at)
+        .bind(fmt_time(&now_local()))
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn restore_project_rules_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_permission_rule SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE project_id = ? AND session_id IS NULL AND deleted_at = ?",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(project_id)
+        .bind(deleted_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_deleted(&self) -> anyhow::Result<Vec<PermissionRule>> {
+        let rows = sqlx::query_as::<_, PermRuleDO>(&format!(
+            "SELECT {SELECT_COLS} FROM cyan_permission_rule
+             WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC, sort ASC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(PermissionRule::try_from).collect()
+    }
+
+    async fn restore(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_permission_rule SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NOT NULL",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -253,6 +317,7 @@ mod tests {
             plugin_origin: None,
             created_at: now_local(),
             updated_at: now_local(),
+            deleted_at: None,
         }
     }
 

@@ -23,6 +23,10 @@ pub trait ModelRepository: Send + Sync {
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
     /// 清除全部默认标记
     async fn clear_default(&self) -> anyhow::Result<()>;
+    /// 回收站：软删模型列表（deleted_at 非空）
+    async fn list_deleted(&self) -> anyhow::Result<Vec<ModelConfig>>;
+    /// 恢复软删模型（清 deleted_at，幂等）
+    async fn restore(&self, id: i64) -> anyhow::Result<()>;
 }
 
 /// MCP 服务器仓储
@@ -38,6 +42,10 @@ pub trait McpRepository: Send + Sync {
     async fn update(&self, server: &McpServer) -> anyhow::Result<()>;
     /// 软删除
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
+    /// 回收站：软删 MCP 服务器列表（deleted_at 非空）
+    async fn list_deleted(&self) -> anyhow::Result<Vec<McpServer>>;
+    /// 恢复软删 MCP 服务器（清 deleted_at，幂等）
+    async fn restore(&self, id: i64) -> anyhow::Result<()>;
 }
 
 /// 权限规则仓储
@@ -69,4 +77,14 @@ pub trait PermRuleRepository: Send + Sync {
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
     /// 按来源插件软删除（插件禁用/卸载时摘除规则）
     async fn soft_delete_by_plugin_origin(&self, origin: &str) -> anyhow::Result<()>;
+    /// 软删项目级规则（项目移除时连带回收）
+    async fn soft_delete_by_project(&self, project_id: i64) -> anyhow::Result<()>;
+    /// 窗口级联软删项目级规则（统一 deleted_at 时间戳；含项目下会话级规则）
+    async fn soft_delete_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()>;
+    /// 窗口级联恢复项目级规则（仅 deleted_at == 窗口时间戳的项目级规则）
+    async fn restore_project_rules_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()>;
+    /// 回收站：软删规则列表（deleted_at 非空）
+    async fn list_deleted(&self) -> anyhow::Result<Vec<PermissionRule>>;
+    /// 恢复软删规则（清 deleted_at，幂等）
+    async fn restore(&self, id: i64) -> anyhow::Result<()>;
 }

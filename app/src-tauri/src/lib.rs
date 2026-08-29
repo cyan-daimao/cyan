@@ -11,14 +11,15 @@ use std::sync::Arc;
 use tauri::Manager;
 
 use adapter::command::{
-    agent_command, config_command, file_command, plugin_command, project_command, session_command,
-    skill_command,
+    agent_command, config_command, file_command, plugin_command, project_command, recycle_command,
+    session_command, skill_command,
 };
 use adapter::event::TauriEventSink;
 use application::agent_service::{AgentService, AgentServiceImpl};
 use application::config_service::{ConfigService, ConfigServiceImpl};
 use application::plugin_service::{PluginService, PluginServiceImpl};
 use application::project_service::{ProjectService, ProjectServiceImpl};
+use application::recycle_service::{RecycleService, RecycleServiceImpl};
 use application::session_service::{SessionService, SessionServiceImpl};
 use application::skill_service::{SkillService, SkillServiceImpl};
 use domain::agent::{CheckpointGateway, LlmGateway, RunEventSink, ToolExecutor};
@@ -105,8 +106,13 @@ pub fn run() {
                 Arc::new(RecycleBinRepositoryImpl::new(pool.clone())),
                 model_repo.clone(),
             ));
-            let project_service: Arc<dyn ProjectService> =
-                Arc::new(ProjectServiceImpl::new(project_repo.clone()));
+            let project_service: Arc<dyn ProjectService> = Arc::new(ProjectServiceImpl::new(
+                project_repo.clone(),
+                session_repo.clone(),
+                message_repo.clone(),
+                checkpoint_repo.clone(),
+                perm_repo.clone(),
+            ));
             let config_service: Arc<dyn ConfigService> = Arc::new(ConfigServiceImpl::new(
                 model_repo.clone(),
                 mcp_repo.clone(),
@@ -125,11 +131,21 @@ pub fn run() {
                 sidecar_for_setup.clone(),
             ));
             let skill_service: Arc<dyn SkillService> = Arc::new(SkillServiceImpl::new(
-                plugin_repo,
+                plugin_repo.clone(),
                 plugins_dir,
                 infra::db::datasource::cyan_home()
                     .map(|h| h.join("skills"))
                     .unwrap_or_else(|_| std::path::PathBuf::from(".cyan/skills")),
+            ));
+            let recycle_service: Arc<dyn RecycleService> = Arc::new(RecycleServiceImpl::new(
+                session_repo.clone(),
+                message_repo.clone(),
+                project_repo.clone(),
+                checkpoint_repo.clone(),
+                model_repo.clone(),
+                mcp_repo.clone(),
+                plugin_repo,
+                perm_repo.clone(),
             ));
             let agent_service: Arc<dyn AgentService> = Arc::new(AgentServiceImpl::new(
                 session_repo,
@@ -150,6 +166,7 @@ pub fn run() {
             app.manage(config_service);
             app.manage(plugin_service);
             app.manage(skill_service);
+            app.manage(recycle_service);
             app.manage(agent_service);
             tracing::info!("cyan 初始化完成");
             Ok(())
@@ -165,9 +182,12 @@ pub fn run() {
             session_command::list_deleted_sessions,
             session_command::restore_session,
             session_command::purge_recycle_bin,
+            recycle_command::list_recycle_bin,
+            recycle_command::restore_recycle_item,
             // 消息编辑
             session_command::edit_message,
             session_command::set_session_model,
+            session_command::rename_session,
             // Agent
             agent_command::send_task,
             agent_command::interrupt_run,

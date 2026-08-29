@@ -85,6 +85,9 @@ function MarketSearchPanel({ dim }: { dim: MarketDim }) {
         allowClear
         value={keyword}
         loading={loading}
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
         onChange={(e) => setKeyword(e.target.value)}
         onSearch={(v) => void search(v.trim())}
         style={{ marginBottom: 12 }}
