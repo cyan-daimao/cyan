@@ -183,6 +183,7 @@ mod tests {
             description: "d".into(),
             cyan_min_version: None,
             permissions: vec!["skills".into()],
+            backend: None,
         }
     }
 

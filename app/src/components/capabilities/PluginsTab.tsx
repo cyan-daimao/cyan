@@ -88,9 +88,25 @@ export function PluginsTab() {
     {
       title: '状态',
       dataIndex: 'status',
-      width: 90,
-      render: (v: PluginDTO['status']) =>
-        v === 'enabled' ? <Tag color="success">已启用</Tag> : <Tag>已禁用</Tag>,
+      width: 130,
+      render: (v: PluginDTO['status'], p) => {
+        // sidecar 展示：backendPort 非空或 backendRunning 即视为有 backend 声明
+        const hasBackend = p.backendPort !== null || p.backendRunning;
+        return (
+          <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
+            {v === 'enabled' ? <Tag color="success">已启用</Tag> : <Tag>已禁用</Tag>}
+            {hasBackend ? (
+              p.backendRunning ? (
+                <span style={{ fontSize: 12, color: 'var(--brand)' }} className="mono">
+                  后端 · :{p.backendPort}
+                </span>
+              ) : (
+                <span style={{ fontSize: 12, color: 'var(--text-3)' }}>后端 未启动</span>
+              )
+            ) : null}
+          </span>
+        );
+      },
     },
     {
       title: '启用',

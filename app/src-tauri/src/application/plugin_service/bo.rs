@@ -53,6 +53,10 @@ pub struct PluginBO {
     pub mcp_count: i64,
     /// 携带权限规则数
     pub rule_count: i64,
+    /// sidecar 是否运行中（list/toggle 时实时查询填充）
+    pub backend_running: bool,
+    /// sidecar 占用端口（未运行 None）
+    pub backend_port: Option<u16>,
     /// 安装时间
     pub installed_at: NaiveDateTime,
 }
@@ -69,6 +73,8 @@ impl From<Plugin> for PluginBO {
             skill_count: p.skill_count,
             mcp_count: p.mcp_count,
             rule_count: p.rule_count,
+            backend_running: false,
+            backend_port: None,
             installed_at: p.created_at,
         }
     }

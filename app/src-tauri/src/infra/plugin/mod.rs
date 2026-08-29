@@ -332,4 +332,21 @@ mod tests {
         std::fs::write(src.path().join("manifest.json"), "{}").unwrap();
         assert!(read_manifest_from_source(src.path()).is_err(), "缺 name 应校验失败");
     }
+
+    #[test]
+    fn manifest_backend_section_parsed() {
+        // 与 plugin_service 测试构造的 backend manifest 同款 JSON
+        let command = "false";
+        let health = ",\"healthPath\":\"/health\"";
+        let text = format!(
+            r#"{{"name":"backend-plugin","version":"1.0.0","author":"","description":"d","permissions":["backend","rules"],"backend":{{"command":"{command}"{health},"mcp":{{"name":"bp-mcp","url":"http://127.0.0.1:{{port}}/sse"}}}}}}"#
+        );
+        let m = parse_manifest(&text).unwrap();
+        let backend = m.backend.expect("backend 段应解析成功");
+        assert_eq!(backend.command, "false");
+        assert_eq!(backend.health_path.as_deref(), Some("/health"));
+        let mcp = backend.mcp.expect("mcp 声明应解析成功");
+        assert_eq!(mcp.name, "bp-mcp");
+        assert_eq!(mcp.url, "http://127.0.0.1:{port}/sse");
+    }
 }

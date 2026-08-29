@@ -324,6 +324,10 @@ export interface PluginDTO {
   ruleCount: number;
   /** 安装时间（YYYY-MM-DD HH:MM:SS） */
   installedAt: string;
+  /** sidecar 后端进程是否在运行 */
+  backendRunning: boolean;
+  /** sidecar 后端端口（cyan 分配；无 backend 声明为 null） */
+  backendPort: number | null;
 }
 
 /* ============================================================

@@ -10,6 +10,7 @@ use crate::domain::config::{
 };
 use crate::error::ServiceError;
 use crate::infra::db::now_local;
+use crate::infra::mcp::McpGateway;
 use crate::infra::{mcp as mcp_infra, mcp_registry, secret};
 
 use super::{
@@ -61,6 +62,7 @@ pub struct ConfigServiceImpl {
     model_repo: Arc<dyn ModelRepository>,
     mcp_repo: Arc<dyn McpRepository>,
     perm_repo: Arc<dyn PermRuleRepository>,
+    mcp_gateway: Arc<dyn McpGateway>,
 }
 
 impl ConfigServiceImpl {
@@ -69,11 +71,13 @@ impl ConfigServiceImpl {
         model_repo: Arc<dyn ModelRepository>,
         mcp_repo: Arc<dyn McpRepository>,
         perm_repo: Arc<dyn PermRuleRepository>,
+        mcp_gateway: Arc<dyn McpGateway>,
     ) -> Self {
         Self {
             model_repo,
             mcp_repo,
             perm_repo,
+            mcp_gateway,
         }
     }
 
@@ -208,9 +212,14 @@ impl ConfigService for ConfigServiceImpl {
             .find(|s| s.id == cmd.id)
             .ok_or_else(|| ServiceError::not_found(format!("MCP 服务器不存在：{}", cmd.id)))?;
         if cmd.enable {
-            // 骨架握手：状态机流转，不做真实工具注入
-            mcp_infra::handshake(&mut server)?;
+            // 真实握手：initialize + tools/list，工具数写回 mark_connected；
+            // 失败 → error 状态先落库再返回错误（前端可见 last_error）
+            if let Err(e) = mcp_infra::handshake(&mut server, &self.mcp_gateway).await {
+                self.mcp_repo.update(&server).await?;
+                return Err(ServiceError::external(e.to_string()));
+            }
         } else {
+            self.mcp_gateway.disconnect(&server.name).await;
             server.disable();
         }
         self.mcp_repo.update(&server).await?;
@@ -356,9 +365,44 @@ mod tests {
             Arc::new(ModelRepositoryImpl::new(pool.clone())),
             Arc::new(McpRepositoryImpl::new(pool.clone())),
             Arc::new(PermRuleRepositoryImpl::new(pool.clone())),
+            Arc::new(crate::infra::mcp::McpPool::new()),
         )
     }
 
+    #[sqlx::test(migrations = "./migrations")]
+    async fn toggle_mcp_enable_failure_marks_error_and_persists(pool: SqlitePool) {
+        let s = svc(&pool);
+        let saved = s
+            .save_mcp_server(SaveMcpCmd {
+                id: None,
+                name: "bad".into(),
+                command: "definitely-not-a-real-binary-xyz123".into(),
+            })
+            .await
+            .unwrap();
+        let err = s
+            .toggle_mcp_server(ToggleMcpCmd {
+                id: saved.id,
+                enable: true,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, 3000);
+        assert!(err.message.contains("启动 MCP 进程失败"));
+        // error 状态与原因已落库
+        let listed = s.list_mcp_servers().await.unwrap();
+        assert_eq!(listed[0].status, "error");
+        assert!(listed[0].last_error.is_some());
+        // disable：断连并复位
+        let bo = s
+            .toggle_mcp_server(ToggleMcpCmd {
+                id: saved.id,
+                enable: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(bo.status, "disabled");
+    }
     #[sqlx::test(migrations = "./migrations")]
     async fn search_mcp_market_empty_keyword_returns_featured_only(pool: SqlitePool) {
         // 空关键字：不打网络，只返回精选

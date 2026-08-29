@@ -125,11 +125,26 @@ Tauri 侧：`asset` protocol scope 增加 `~/.cyan/plugins/**`，iframe src 用 
 
 插件声明 `contributes.panels`（侧栏面板 / 对话框页面），宿主提供挂载容器与布局约束。
 
-## 5. 插件 v3 — sidecar 后端
+## 5. 插件 v3 — sidecar 后端（v1.4 已落地）
 
-- manifest 增加 `server.command`：宿主拉起子进程，通信走 stdio JSON-RPC 或 loopback HTTP + 一次性 token
-- 复用 `infra/mcp` 的子进程管理；与 MCP 的差异：sidecar 不只暴露工具给 Agent，还可给插件 UI 供数据
-- 安全边界：子进程无法真沙箱 → 配合 Seatbelt 沙箱（独立安全项）落地；此前靠「安装时权限明示 + 用户信任」
+- manifest 增加 `backend` 段：
+
+```json
+{
+  "permissions": ["backend"],
+  "backend": {
+    "command": "./cyancat-bin serve --port {port}",
+    "healthPath": "/health",
+    "mcp": { "name": "cyancat", "url": "http://127.0.0.1:{port}/sse" }
+  }
+}
+```
+
+- **开关即启停**：启用插件 → cyan 从受管段（18700–18799）分配空闲端口并替换 `{port}` → spawn 子进程（cwd=插件目录，`kill_on_drop`）→ `healthPath` 轮询就绪（15s 超时）→ 声明了 `mcp` 则自动注册 MCP 记录（disabled 待启用）；禁用/卸载 → kill 进程、释放端口、MCP 记录禁用。任一步失败整体回滚，插件保持 disabled。
+- **端口防冲突**：分配器内存登记 plugin→port，先查登记再 bind 探测；段耗尽报错。多插件并存不撞车。
+- **MCP 传输约定**：`McpServer.command` 以 `http(s)://` 开头 = SSE 传输，否则 stdio 命令；不改表结构。对话内与插件通信一律走 MCP（`mcp__<server>__<tool>` 注入 agent loop，过权限引擎审批）。
+- **与 MCP 的差异**：sidecar 不只暴露工具给 Agent，还可（v2 起）给插件 UI 供数据。
+- **安全边界**：子进程无法真沙箱 → 配合 Seatbelt 沙箱（独立安全项）落地；此前靠「安装时权限明示（`backend` 权限）+ 用户信任」。
 
 ## 6. MCP 市场（v1.3 已落地）
 
@@ -148,6 +163,7 @@ Tauri 侧：`asset` protocol scope 增加 `~/.cyan/plugins/**`，iframe src 用 
 | `fs:read` / `fs:write` | 读写当前项目文件（写仍过权限引擎） |
 | `agent:run` | 可发起 Agent 任务 |
 | `network` | sidecar 可出网（v3） |
+| `backend` | 声明 sidecar 后端进程（v3） |
 | `ui` | 注册 UI 面板（v2） |
 
 ## 8. 实施路线
@@ -159,5 +175,6 @@ Tauri 侧：`asset` protocol scope 增加 `~/.cyan/plugins/**`，iframe src 用 
 | 插件 v1.1 | 插件市场（GitHub 搜索 + 一键安装） | ✅ 已落地 |
 | 技能 v1.2 | 技能市场（GitHub `cyan-skill` topic + 一键安装到全局） | ✅ 已落地 |
 | 市场 v1.3 | MCP 官方 registry + 精选知名工具一键安装；技能兼容 Claude `*/SKILL.md` 布局、搜索并入 `claude-skill` topic | ✅ 已落地 |
+| 插件 v1.4 | sidecar 后端（开关启停 + 端口分配）+ 真实 MCP 客户端（stdio/SSE、工具注入 agent loop） | ✅ 已落地 |
 | 插件 v2 | iframe 沙箱 UI + bridge 协议 | 规划中 |
-| 插件 v3 | sidecar 后端 + Seatbelt | 规划中 |
+| 插件 v3.1 | sidecar Seatbelt 沙箱 | 规划中 |

@@ -139,6 +139,10 @@ pub struct PluginDTO {
     pub mcp_count: i64,
     /// 携带权限规则数
     pub rule_count: i64,
+    /// sidecar 是否运行中
+    pub backend_running: bool,
+    /// sidecar 占用端口（未运行 null）
+    pub backend_port: Option<u16>,
     /// 安装时间（YYYY-MM-DD HH:MM:SS）
     pub installed_at: String,
 }
@@ -155,6 +159,8 @@ impl From<PluginBO> for PluginDTO {
             skill_count: bo.skill_count,
             mcp_count: bo.mcp_count,
             rule_count: bo.rule_count,
+            backend_running: bo.backend_running,
+            backend_port: bo.backend_port,
             installed_at: fmt_time(&bo.installed_at),
         }
     }

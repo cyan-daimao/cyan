@@ -15,6 +15,7 @@ use crate::domain::session::{Message, MessageKind, MessageRepository, SessionRep
 use crate::domain::shared::ProjectPath;
 use crate::error::ServiceError;
 use crate::infra::db::now_local;
+use crate::infra::mcp::McpGateway;
 use crate::infra::secret;
 
 use super::runner::{run_loop, RunContext};
@@ -60,6 +61,7 @@ impl AgentServiceImpl {
         executor: Arc<dyn ToolExecutor>,
         checkpoint_gateway: Arc<dyn CheckpointGateway>,
         sink: Arc<dyn RunEventSink>,
+        mcp: Arc<dyn McpGateway>,
     ) -> Self {
         let ctx = RunContext {
             session_repo: session_repo.clone(),
@@ -69,6 +71,7 @@ impl AgentServiceImpl {
             llm,
             executor,
             sink,
+            mcp,
         };
         Self {
             ctx,

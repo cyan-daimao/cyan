@@ -316,6 +316,7 @@ mod tests {
             description: String::new(),
             cyan_min_version: None,
             permissions: vec!["skills".into()],
+            backend: None,
         };
         let plugin_repo = PluginRepositoryImpl::new(pool.clone());
         let mut plugin = Plugin::from_manifest(&manifest, (2, 0, 0), crate::infra::db::now_local());

@@ -16,6 +16,7 @@ use crate::domain::config::{ModelConfig, PermAction, PermRuleRepository, Permiss
 use crate::domain::session::{Message, MessageKind, MessageRepository, Session, SessionRepository, COMPACT_THRESHOLD};
 use crate::domain::shared::ProjectPath;
 use crate::infra::db::now_local;
+use crate::infra::mcp::{self, McpGateway};
 
 /// 单次运行最大 Agent 轮次（防失控）
 const MAX_ITERS: usize = 25;
@@ -43,6 +44,8 @@ pub struct RunContext {
     pub executor: Arc<dyn ToolExecutor>,
     /// 事件推送端口
     pub sink: Arc<dyn RunEventSink>,
+    /// MCP 连接池端口（工具注入 + 调用路由）
+    pub mcp: Arc<dyn McpGateway>,
 }
 
 /// 内置工具表（下发给 LLM 的 JSON Schema）
@@ -446,10 +449,22 @@ pub async fn run_loop(
     let cancel = run.token();
     let mut engine = PermissionEngine::new(rules, mode);
     // 「能力」面板禁用的工具不下发给 LLM（模型看不到也就不会调用）
-    let tools: Vec<ToolSpec> = builtin_tools()
+    let mut tools: Vec<ToolSpec> = builtin_tools()
         .into_iter()
         .filter(|t| !disabled_tools.iter().any(|d| d == &t.name))
         .collect();
+    // 注入已连接 MCP server 的工具：`mcp__<server>__<tool>`，schema 原样透传
+    for (server, t) in ctx.mcp.connected_tools() {
+        let name = mcp::tool_name(&server, &t.name);
+        if disabled_tools.iter().any(|d| d == &name) {
+            continue;
+        }
+        tools.push(ToolSpec {
+            name,
+            description: t.description,
+            parameters: t.input_schema,
+        });
+    }
     let mut llm_messages = vec![ChatMessage::text(ChatRole::System, system_prompt(&root))];
     llm_messages.extend(history_to_chat(&session.messages));
     let mut total_usage = TokenUsage::default();
@@ -728,7 +743,16 @@ pub async fn run_loop(
                     tool: call.tool.clone(),
                     arg: call.arg.clone(),
                 });
-                let out: ToolOutput = ctx.executor.execute(&root, &call, cancel.clone()).await;
+                let out: ToolOutput = if let Some((server, mcp_tool)) = mcp::parse_tool_name(&call.tool)
+                {
+                    // MCP 工具：路由到对应连接 tools/call；运行中断连 → 错误文本收尾（不 panic）
+                    match ctx.mcp.call_tool(&server, &mcp_tool, call.input.clone()).await {
+                        Ok(text) => ToolOutput::ok(text),
+                        Err(e) => ToolOutput::error(e.to_string()),
+                    }
+                } else {
+                    ctx.executor.execute(&root, &call, cancel.clone()).await
+                };
                 ctx.sink.emit(AgentEvent::ToolEnd {
                     session_id,
                     call_id: call.call_id.clone(),
@@ -953,5 +977,217 @@ mod tests {
         });
         let out = llm_summarize(&llm, &test_model(), "sk-x", &parts, CancellationToken::new()).await;
         assert!(out.is_none());
+    }
+
+    // ---- MCP 工具注入与路由（mock gateway + 真 sqlite 仓储跑完整 run_loop）----
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use sqlx::SqlitePool;
+
+    use crate::infra::db::checkpoint_repo::CheckpointRepositoryImpl;
+    use crate::infra::db::perm_rule_repo::PermRuleRepositoryImpl;
+    use crate::infra::db::session_repo::{MessageRepositoryImpl, SessionRepositoryImpl};
+    use crate::infra::mcp::{McpError, McpTool};
+    use crate::infra::tools::BuiltinToolExecutor;
+
+    /// 记录每次请求工具列表的 LLM：第一轮发 mcp 工具调用，第二轮纯文本收尾
+    #[derive(Default)]
+    struct SeqLlm {
+        seen_tools: Mutex<Vec<Vec<String>>>,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmGateway for SeqLlm {
+        async fn stream_chat(
+            &self,
+            req: &crate::domain::agent::ChatRequest,
+            _on_text: &mut (dyn FnMut(String) + Send + '_),
+            _on_thinking: &mut (dyn FnMut(String) + Send + '_),
+            _cancel: CancellationToken,
+        ) -> Result<AssistantTurn, LlmError> {
+            self.seen_tools
+                .lock()
+                .unwrap()
+                .push(req.tools.iter().map(|t| t.name.clone()).collect());
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Ok(AssistantTurn {
+                    text: "调用 MCP 工具".into(),
+                    tool_calls: vec![ChatToolCall {
+                        id: "c1".into(),
+                        name: "mcp__fs__echo".into(),
+                        arguments: "{\"text\":\"hi\"}".into(),
+                    }],
+                    ..Default::default()
+                })
+            } else {
+                Ok(AssistantTurn {
+                    text: "完成".into(),
+                    ..Default::default()
+                })
+            }
+        }
+    }
+
+    /// mock MCP gateway：固定工具列表 + 记录路由调用，fail=true 模拟运行中断连
+    struct MockMcpGateway {
+        tools: Vec<(String, McpTool)>,
+        calls: Mutex<Vec<(String, String)>>,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl McpGateway for MockMcpGateway {
+        fn connected_tools(&self) -> Vec<(String, McpTool)> {
+            self.tools.clone()
+        }
+        async fn call_tool(&self, server: &str, tool: &str, _args: Value) -> Result<String, McpError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((server.to_string(), tool.to_string()));
+            if self.fail {
+                Err(McpError::NotConnected(server.to_string()))
+            } else {
+                Ok("pong".into())
+            }
+        }
+        async fn connect(&self, _server: &str, _command: &str) -> Result<usize, McpError> {
+            Ok(0)
+        }
+        async fn disconnect(&self, _server: &str) {}
+    }
+
+    /// 记录事件的 sink
+    #[derive(Default)]
+    struct RecordingSink {
+        events: Mutex<Vec<AgentEvent>>,
+    }
+
+    impl RunEventSink for RecordingSink {
+        fn emit(&self, event: AgentEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    fn mock_mcp(fail: bool) -> Arc<MockMcpGateway> {
+        Arc::new(MockMcpGateway {
+            tools: vec![(
+                "fs".into(),
+                McpTool {
+                    name: "echo".into(),
+                    description: "回显".into(),
+                    input_schema: json!({"type": "object", "properties": {"text": {"type": "string"}}}),
+                },
+            )],
+            calls: Mutex::new(Vec::new()),
+            fail,
+        })
+    }
+
+    /// 真 sqlite 仓储 + tempdir 项目根，组装 RunContext 与带一条用户消息的会话
+    async fn build_ctx(
+        pool: &SqlitePool,
+        llm: Arc<dyn LlmGateway>,
+        sink: Arc<dyn RunEventSink>,
+        mcp: Arc<dyn McpGateway>,
+    ) -> (RunContext, Session, ProjectPath, tempfile::TempDir) {
+        let pid = sqlx::query(
+            "INSERT INTO cyan_project (name, path, created_by, updated_by, created_at, updated_at)
+             VALUES ('demo', '/tmp/demo', 'local', 'local', '2026-08-27 10:00:00', '2026-08-27 10:00:00')",
+        )
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        let session_repo: Arc<dyn SessionRepository> =
+            Arc::new(SessionRepositoryImpl::new(pool.clone()));
+        let message_repo: Arc<dyn MessageRepository> =
+            Arc::new(MessageRepositoryImpl::new(pool.clone()));
+        let mut session = Session::new(pid, now_local());
+        session_repo.insert(&mut session).await.unwrap();
+        let mut m = Message::new(
+            session.id,
+            MessageKind::User,
+            Message::text_payload("调用 mcp 工具"),
+            now_local(),
+        );
+        message_repo.insert(&mut m).await.unwrap();
+        session.messages = message_repo.list_by_session(session.id).await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let root = ProjectPath::new(tmp.path()).unwrap();
+        let ctx = RunContext {
+            session_repo,
+            message_repo,
+            checkpoint_repo: Arc::new(CheckpointRepositoryImpl::new(pool.clone())),
+            perm_repo: Arc::new(PermRuleRepositoryImpl::new(pool.clone())),
+            llm,
+            executor: Arc::new(BuiltinToolExecutor),
+            sink,
+            mcp,
+        };
+        (ctx, session, root, tmp)
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn run_loop_injects_and_routes_mcp_tools(pool: SqlitePool) {
+        let mcp = mock_mcp(false);
+        let llm = Arc::new(SeqLlm::default());
+        let sink = Arc::new(RecordingSink::default());
+        let (ctx, session, root, _tmp) =
+            build_ctx(&pool, llm.clone(), sink.clone(), mcp.clone()).await;
+        let run = Arc::new(AgentRun::new(session.id));
+        run.start().unwrap();
+        // auto 模式：mcp 工具默认 Ask → 自动放行
+        run_loop(ctx, run, session, root, test_model(), "sk-x".into(), vec![], PermMode::Auto, vec![])
+            .await;
+
+        // connected server 的工具以 mcp__ 前缀出现在 LLM 请求工具列表
+        let seen = llm.seen_tools.lock().unwrap();
+        assert!(
+            seen[0].iter().any(|n| n == "mcp__fs__echo"),
+            "首轮请求应注入 mcp__fs__echo，实际：{:?}",
+            seen[0]
+        );
+        // 调用路由到正确 server/tool
+        assert_eq!(
+            mcp.calls.lock().unwrap().as_slice(),
+            &[("fs".to_string(), "echo".to_string())]
+        );
+        // 工具结果回传 + 运行正常收尾
+        let events = sink.events.lock().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::ToolEnd { status, output, .. } if status == "ok" && output == "pong"
+        )));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::RunEnd { result: RunResult::Done, .. })));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn run_loop_mcp_disconnect_returns_error_text(pool: SqlitePool) {
+        let mcp = mock_mcp(true); // 模拟运行期间连接断开
+        let llm = Arc::new(SeqLlm::default());
+        let sink = Arc::new(RecordingSink::default());
+        let (ctx, session, root, _tmp) =
+            build_ctx(&pool, llm.clone(), sink.clone(), mcp.clone()).await;
+        let run = Arc::new(AgentRun::new(session.id));
+        run.start().unwrap();
+        run_loop(ctx, run, session, root, test_model(), "sk-x".into(), vec![], PermMode::Auto, vec![])
+            .await;
+
+        let events = sink.events.lock().unwrap();
+        // 工具结果返回错误文本（不 panic），运行继续正常收尾
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::ToolEnd { status, output, .. } if status == "error" && output.contains("未连接")
+        )));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::RunEnd { result: RunResult::Done, .. })));
     }
 }

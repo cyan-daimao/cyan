@@ -23,7 +23,7 @@ use application::session_service::{SessionService, SessionServiceImpl};
 use application::skill_service::{SkillService, SkillServiceImpl};
 use domain::agent::{CheckpointGateway, LlmGateway, RunEventSink, ToolExecutor};
 use domain::config::{McpRepository, ModelRepository, PermRuleRepository};
-use domain::plugin::PluginRepository;
+use domain::plugin::{PluginRepository, SidecarGateway};
 use domain::project::ProjectRepository;
 use domain::session::{MessageRepository, SessionRepository};
 use infra::db::checkpoint_repo::CheckpointRepositoryImpl;
@@ -60,10 +60,13 @@ fn init_tracing() {
 
 /// 启动 Tauri 应用
 pub fn run() {
-    tauri::Builder::default()
+    // sidecar 管理器：setup 注入插件服务，退出钩子回收全部子进程
+    let sidecar_manager = Arc::new(infra::sidecar::SidecarManager::new());
+    let sidecar_for_setup = sidecar_manager.clone();
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
             init_tracing();
             tracing::info!("cyan 启动，初始化数据库");
             let pool = tauri::async_runtime::block_on(infra::db::datasource::init_pool())
@@ -91,6 +94,8 @@ pub fn run() {
             let checkpoint_gateway: Arc<dyn CheckpointGateway> = Arc::new(GitCheckpointGateway);
             let sink: Arc<dyn RunEventSink> =
                 Arc::new(TauriEventSink::new(app.handle().clone()));
+            // MCP 连接池（config 握手与 agent 工具注入共享同一实例）
+            let mcp_gateway: Arc<dyn infra::mcp::McpGateway> = Arc::new(infra::mcp::McpPool::new());
 
             // application 服务装配（Arc<dyn Service> 注入 adapter）
             let session_service: Arc<dyn SessionService> = Arc::new(SessionServiceImpl::new(
@@ -106,6 +111,7 @@ pub fn run() {
                 model_repo.clone(),
                 mcp_repo.clone(),
                 perm_repo.clone(),
+                mcp_gateway.clone(),
             ));
             // 插件根目录 `~/.cyan/plugins`（测试经构造注入隔离）
             let plugins_dir = infra::db::datasource::cyan_home()
@@ -116,6 +122,7 @@ pub fn run() {
                 mcp_repo.clone(),
                 perm_repo.clone(),
                 plugins_dir.clone(),
+                sidecar_for_setup.clone(),
             ));
             let skill_service: Arc<dyn SkillService> = Arc::new(SkillServiceImpl::new(
                 plugin_repo,
@@ -135,6 +142,7 @@ pub fn run() {
                 executor,
                 checkpoint_gateway,
                 sink,
+                mcp_gateway,
             ));
 
             app.manage(session_service);
@@ -202,7 +210,14 @@ pub fn run() {
             plugin_command::delete_plugin,
             plugin_command::search_marketplace,
             plugin_command::install_plugin_from_github,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running cyan application");
+        ]);
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building cyan application");
+    // App 退出回收：停掉全部 sidecar 子进程（kill_on_drop 之外的显式清理）
+    app.run(move |_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            tauri::async_runtime::block_on(sidecar_manager.stop_all());
+        }
+    });
 }

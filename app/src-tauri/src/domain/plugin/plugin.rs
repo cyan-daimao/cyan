@@ -48,9 +48,33 @@ pub struct PluginManifest {
     /// 最低宿主版本（v1 仅记录不强制）
     #[serde(default)]
     pub cyan_min_version: Option<String>,
-    /// 声明的权限（白名单：skills/mcp/rules）
+    /// 声明的权限（白名单：skills/mcp/rules/backend）
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// sidecar 后端声明（可选；须声明 backend 权限）
+    #[serde(default)]
+    pub backend: Option<BackendDecl>,
+}
+
+/// sidecar 后端声明（manifest `backend` 段；`{port}` 由 cyan 替换为分配端口）
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendDecl {
+    /// 启动命令模板（空格分词；`{port}` 占位符）
+    pub command: String,
+    /// 健康检查路径（可选，200 视为就绪；缺省 spawn 后即就绪）
+    pub health_path: Option<String>,
+    /// MCP 声明（可选，sidecar 就绪后注册 MCP 记录）
+    pub mcp: Option<BackendMcpDecl>,
+}
+
+/// sidecar 的 MCP 声明
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BackendMcpDecl {
+    /// MCP 服务器名
+    pub name: String,
+    /// SSE 地址模板（`{port}` 占位符；http(s):// 开头 = SSE 传输）
+    pub url: String,
 }
 
 fn default_version() -> String {
@@ -58,7 +82,7 @@ fn default_version() -> String {
 }
 
 /// 权限白名单
-const ALLOWED_PERMISSIONS: &[&str] = &["skills", "mcp", "rules"];
+const ALLOWED_PERMISSIONS: &[&str] = &["skills", "mcp", "rules", "backend"];
 
 impl PluginManifest {
     /// 校验：name 必填且为合法目录名（kebab-case），permissions 全在白名单内
@@ -82,6 +106,36 @@ impl PluginManifest {
                     "未知权限声明：{p}（白名单：{}）",
                     ALLOWED_PERMISSIONS.join("/")
                 )));
+            }
+        }
+        // sidecar 后端声明校验：command 非空 + backend 权限必需
+        if let Some(backend) = &self.backend {
+            if backend.command.trim().is_empty() {
+                return Err(DomainError::Validation("backend.command 不能为空".into()));
+            }
+            if let Some(hp) = &backend.health_path {
+                if !hp.starts_with('/') {
+                    return Err(DomainError::Validation(
+                        "backend.healthPath 须以 / 开头".into(),
+                    ));
+                }
+            }
+            if let Some(mcp) = &backend.mcp {
+                if mcp.name.trim().is_empty() || mcp.url.trim().is_empty() {
+                    return Err(DomainError::Validation(
+                        "backend.mcp 的 name/url 不能为空".into(),
+                    ));
+                }
+                if !mcp.url.contains("{port}") {
+                    return Err(DomainError::Validation(
+                        "backend.mcp.url 须包含 {port} 占位符".into(),
+                    ));
+                }
+            }
+            if !self.has_permission("backend") {
+                return Err(DomainError::Validation(
+                    "声明了 backend 段但未在 permissions 中声明 backend 权限".into(),
+                ));
             }
         }
         Ok(())
@@ -169,6 +223,7 @@ mod tests {
             description: "d".into(),
             cyan_min_version: None,
             permissions: perms.into_iter().map(String::from).collect(),
+            backend: None,
         }
     }
 
@@ -190,6 +245,61 @@ mod tests {
     fn manifest_validate_rejects_unknown_permission() {
         let err = manifest("ok-plugin", vec!["fs:read"]).validate().unwrap_err();
         assert!(matches!(err, DomainError::Validation(_)));
+    }
+
+    #[test]
+    fn manifest_backend_validation() {
+        // 合法 backend 声明（含 backend 权限 + {port} 占位符）
+        let mut m = manifest("ok-plugin", vec!["backend"]);
+        m.backend = Some(BackendDecl {
+            command: "./bin serve --port {port}".into(),
+            health_path: Some("/health".into()),
+            mcp: Some(BackendMcpDecl {
+                name: "ok".into(),
+                url: "http://127.0.0.1:{port}/sse".into(),
+            }),
+        });
+        assert!(m.validate().is_ok());
+
+        // 未声明 backend 权限 → 拒绝
+        let mut m = manifest("ok-plugin", vec!["skills"]);
+        m.backend = Some(BackendDecl {
+            command: "./bin serve".into(),
+            health_path: None,
+            mcp: None,
+        });
+        let err = m.validate().unwrap_err();
+        assert!(err.to_string().contains("backend 权限"));
+
+        // command 为空 → 拒绝
+        let mut m = manifest("ok-plugin", vec!["backend"]);
+        m.backend = Some(BackendDecl {
+            command: "  ".into(),
+            health_path: None,
+            mcp: None,
+        });
+        assert!(m.validate().is_err());
+
+        // healthPath 不以 / 开头 → 拒绝
+        let mut m = manifest("ok-plugin", vec!["backend"]);
+        m.backend = Some(BackendDecl {
+            command: "./bin".into(),
+            health_path: Some("health".into()),
+            mcp: None,
+        });
+        assert!(m.validate().is_err());
+
+        // mcp.url 缺 {port} → 拒绝
+        let mut m = manifest("ok-plugin", vec!["backend"]);
+        m.backend = Some(BackendDecl {
+            command: "./bin".into(),
+            health_path: None,
+            mcp: Some(BackendMcpDecl {
+                name: "x".into(),
+                url: "http://127.0.0.1/sse".into(),
+            }),
+        });
+        assert!(m.validate().is_err());
     }
 
     #[test]

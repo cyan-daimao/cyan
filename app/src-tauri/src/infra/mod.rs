@@ -9,5 +9,6 @@ pub mod mcp_registry;
 pub mod plugin;
 pub mod process;
 pub mod secret;
+pub mod sidecar;
 pub mod tools;
 pub mod web;
