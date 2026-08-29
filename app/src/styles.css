@@ -2095,3 +2095,13 @@ pre {
 [data-theme='dark'] .market-card a.mc-name:hover {
   color: var(--primary-hover);
 }
+
+/* ---- Modal 小屏自适应：限宽 + 内容区超高滚动 ---- */
+.ant-modal {
+  max-width: calc(100vw - 32px);
+}
+
+.ant-modal-body {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+}
