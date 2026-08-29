@@ -13,7 +13,6 @@ import { SystemDivider } from '../../../components/message/SystemDivider';
 import { ToolCard } from '../../../components/message/ToolCard';
 import { ApprovalCard } from '../../../components/message/ApprovalCard';
 import { ThinkingBubble } from '../../../components/message/ThinkingBubble';
-import logoUrl from '../../../assets/logo.png';
 
 interface MessageNodeProps {
   node: ChatNode;
@@ -22,8 +21,8 @@ interface MessageNodeProps {
 }
 
 /**
- * 消息节点。user/assistant 文本消息支持行内编辑（编辑即截断重发）：
- * 编辑第 i 条会物理删除其后所有消息；编辑 user 且发生截断时自动以新文本重发。
+ * 消息节点。仅 user 文本消息支持行内编辑（编辑即截断重发）：
+ * 编辑第 i 条会物理删除其后所有消息，并自动以新文本重发。
  */
 function MessageNode({ node, index, total }: MessageNodeProps) {
   const decide = useAgentStore((s) => s.decide);
@@ -38,7 +37,7 @@ function MessageNode({ node, index, total }: MessageNodeProps) {
   const [editText, setEditText] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const editable = node.kind === 'user' || node.kind === 'assistant';
+  const editable = node.kind === 'user';
 
   const startEdit = () => {
     if (!editable || busy) return;
@@ -86,9 +85,7 @@ function MessageNode({ node, index, total }: MessageNodeProps) {
     }
     confirmDanger({
       title: '编辑消息',
-      content: `编辑此消息将永久删除其后 ${trailing} 条消息，不可恢复。${
-        node.kind === 'user' ? '并将以新内容重新生成回复。' : ''
-      }`,
+      content: `编辑此消息将永久删除其后 ${trailing} 条消息，不可恢复，并将以新内容重新生成回复。`,
       okText: '确认编辑',
       onOk: () => doSave(text, true),
     });
@@ -136,22 +133,9 @@ function MessageNode({ node, index, total }: MessageNodeProps) {
   }
 
   if (node.kind === 'assistant') {
-    if (editing) {
-      return (
-        <div className="msg-row">
-          <img className="a-avatar logo-img" src={logoUrl} alt="cyan" />
-          <div className="msg-assistant">{editBox}</div>
-        </div>
-      );
-    }
     return (
       <div className="msg-editable msg-editable-assistant">
         <AssistantText text={node.text} thinking={node.thinking} streaming={node.streaming} />
-        {!busy && !node.streaming ? (
-          <button className="msg-edit-btn" title="编辑" onClick={startEdit}>
-            <EditOutlined />
-          </button>
-        ) : null}
       </div>
     );
   }

@@ -41,7 +41,7 @@ pub trait SessionService: Send + Sync {
     async fn restore_session(&self, cmd: RestoreSessionCmd) -> Result<(), ServiceError>;
     /// 清空回收站：全库软删记录硬删，返回总删除行数
     async fn purge_recycle_bin(&self) -> Result<i64, ServiceError>;
-    /// 编辑消息（编辑即截断：更新 payload 文本 + 物理删除后续消息），返回更新后的完整会话
+    /// 编辑用户消息（编辑即截断：更新 payload 文本 + 物理删除后续消息），返回更新后的完整会话
     async fn edit_message(&self, cmd: EditMessageCmd) -> Result<SessionBO, ServiceError>;
 }
 
@@ -181,6 +181,9 @@ impl SessionService for SessionServiceImpl {
             .find_by_id(cmd.id)
             .await?
             .ok_or_else(|| ServiceError::not_found(format!("消息不存在：{}", cmd.id)))?;
+        if msg.kind != MessageKind::User {
+            return Err(ServiceError::validation("仅支持编辑用户消息"));
+        }
         // 替换 payload 的 text 键，其余键（thinking/toolCalls 等）原样保留
         let mut payload: serde_json::Value = serde_json::from_str(&msg.payload)
             .map_err(|_| ServiceError::validation("消息载荷不是合法 JSON"))?;
@@ -263,42 +266,40 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn edit_message_updates_text_keeps_keys_and_truncates(pool: SqlitePool) {
+    async fn edit_message_updates_text_and_truncates(pool: SqlitePool) {
         let svc = svc(&pool);
         let (sid, ids) = seed_session_with_messages(&pool).await;
 
-        // 编辑第 2 条（assistant，payload 带 thinking/toolCalls 键）
+        // 编辑第 3 条（user「问题2」）
         let bo = svc
             .edit_message(EditMessageCmd {
-                id: ids[1],
-                text: "改后的回答".into(),
+                id: ids[2],
+                text: "改后的问题".into(),
             })
             .await
             .unwrap();
 
-        // 文本更新且其它键保留
+        // 文本更新
         let msg_repo = MessageRepositoryImpl::new(pool.clone());
-        let edited = msg_repo.find_by_id(ids[1]).await.unwrap().unwrap();
+        let edited = msg_repo.find_by_id(ids[2]).await.unwrap().unwrap();
         let v: serde_json::Value = serde_json::from_str(&edited.payload).unwrap();
-        assert_eq!(v["text"], "改后的回答");
-        assert_eq!(v["thinking"], "思考内容", "thinking 键应原样保留");
-        assert!(v["toolCalls"].is_array(), "toolCalls 键应原样保留");
+        assert_eq!(v["text"], "改后的问题");
 
-        // 第 3、4 条物理消失（连同软删记录也查无）
+        // 第 4 条物理消失（连同软删记录也查无）
         let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM cyan_message WHERE session_id = ?")
             .bind(sid)
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(total.0, 2, "seq 更大的消息应物理删除");
+        assert_eq!(total.0, 3, "seq 更大的消息应物理删除");
 
         // 返回值为截断后的完整会话
-        assert_eq!(bo.messages.len(), 2);
-        assert_eq!(bo.messages[1].payload, edited.payload);
+        assert_eq!(bo.messages.len(), 3);
+        assert_eq!(bo.messages[2].payload, edited.payload);
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn edit_message_rejects_empty_text_and_missing_id(pool: SqlitePool) {
+    async fn edit_message_rejects_empty_text_missing_id_and_non_user(pool: SqlitePool) {
         let svc = svc(&pool);
         let (_, ids) = seed_session_with_messages(&pool).await;
 
@@ -319,5 +320,15 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code, 2002);
+
+        // assistant 消息不可编辑
+        let err = svc
+            .edit_message(EditMessageCmd {
+                id: ids[1],
+                text: "改回答".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, 1001);
     }
 }
