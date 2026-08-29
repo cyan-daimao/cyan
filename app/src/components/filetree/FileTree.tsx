@@ -7,13 +7,13 @@ interface FileTreeProps {
   onFile: (path: string) => void;
 }
 
-/** 文件树：维护目录展开集合，默认展开第一层目录 */
+/** 文件树：维护目录展开集合，默认全部收起（点击目录名展开） */
 export function FileTree({ nodes, onFile }: FileTreeProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 
-  // 新树加载后默认展开第一层目录
+  // 换树（刷新/切项目）时重置为全部收起
   useEffect(() => {
-    setExpanded(new Set(nodes.filter((n) => n.isDir).map((n) => n.path)));
+    setExpanded(new Set());
   }, [nodes]);
 
   const toggleDir = useCallback((path: string) => {
