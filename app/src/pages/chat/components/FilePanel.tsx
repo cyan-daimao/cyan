@@ -78,7 +78,7 @@ export function FilePanel({ projectPath, projectName, onClose, onReference }: Fi
         {error ? (
           <div className="session-empty">加载失败：{error}，请重新指定项目</div>
         ) : projectPath ? (
-          <FileTree nodes={nodes} onFile={(p) => void onFile(p)} />
+          <FileTree nodes={nodes} onFile={(p) => void onFile(p)} treeKey={projectPath} />
         ) : (
           <div className="session-empty">请先打开项目</div>
         )}
