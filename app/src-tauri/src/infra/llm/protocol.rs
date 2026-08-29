@@ -74,6 +74,9 @@ pub struct ChatCompletionsReq {
     pub stream: bool,
     /// 流式用量选项
     pub stream_options: StreamOptions,
+    /// 输出上限
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
 }
 
 /// 流式选项（要求末包返回 usage）

@@ -6,5 +6,5 @@ pub mod repository;
 pub mod session;
 
 pub use message::{Message, MessageKind};
-pub use repository::{MessageRepository, SessionRepository};
+pub use repository::{MessageRepository, RecycleBinRepository, SessionRepository};
 pub use session::{Session, COMPACT_THRESHOLD};

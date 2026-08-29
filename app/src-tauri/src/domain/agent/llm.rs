@@ -66,6 +66,8 @@ pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     /// 可用工具
     pub tools: Vec<ToolSpec>,
+    /// 输出上限（None = 不下发；压缩摘要等轻量调用用小值）
+    pub max_tokens: Option<u32>,
 }
 
 /// 一轮助手输出（流式聚合结果）

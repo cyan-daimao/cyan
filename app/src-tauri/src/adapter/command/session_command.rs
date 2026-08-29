@@ -1,4 +1,5 @@
-//! 会话相关命令：list_sessions / get_session / create_session / delete_session。
+//! 会话相关命令：list_sessions / get_session / create_session / delete_session / project_token_usage
+//! + 回收站三命令（list_deleted_sessions / restore_session / purge_recycle_bin）。
 
 use std::sync::Arc;
 
@@ -6,7 +7,8 @@ use tauri::State;
 
 use crate::adapter::dto::{
     CreateSessionRequest, DeleteSessionRequest, GetSessionRequest, ListSessionRequest,
-    ProjectTokenUsageDTO, ProjectTokenUsageRequest, SessionDTO, SessionSummaryDTO,
+    ProjectTokenUsageDTO, ProjectTokenUsageRequest, RestoreSessionRequest, SessionDTO,
+    SessionSummaryDTO,
 };
 use crate::application::session_service::SessionService;
 use crate::error::ServiceError;
@@ -58,4 +60,30 @@ pub async fn project_token_usage(
 ) -> Result<ProjectTokenUsageDTO, ServiceError> {
     let bo = svc.token_usage(request.into()).await?;
     Ok(ProjectTokenUsageDTO::from(bo))
+}
+
+/// 回收站：软删会话列表（带所属项目名称/路径）
+#[tauri::command]
+pub async fn list_deleted_sessions(
+    svc: State<'_, Arc<dyn SessionService>>,
+) -> Result<Vec<SessionDTO>, ServiceError> {
+    let bos = svc.list_deleted_sessions().await?;
+    Ok(bos.into_iter().map(SessionDTO::from).collect())
+}
+
+/// 恢复会话（含全部软删消息，幂等）
+#[tauri::command]
+pub async fn restore_session(
+    svc: State<'_, Arc<dyn SessionService>>,
+    request: RestoreSessionRequest,
+) -> Result<(), ServiceError> {
+    svc.restore_session(request.into()).await
+}
+
+/// 清空回收站：全库软删记录硬删，返回总删除行数
+#[tauri::command]
+pub async fn purge_recycle_bin(
+    svc: State<'_, Arc<dyn SessionService>>,
+) -> Result<i64, ServiceError> {
+    svc.purge_recycle_bin().await
 }

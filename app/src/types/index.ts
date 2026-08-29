@@ -82,6 +82,12 @@ export interface SessionDTO {
   messages: MessageDTO[];
   createdAt: string;
   updatedAt: string;
+  /** 删除时间（回收站用；未删除为 null） */
+  deletedAt?: string | null;
+  /** 所属项目名称（回收站列表携带；常规打开为空串） */
+  projectName?: string;
+  /** 所属项目路径（同上） */
+  projectPath?: string;
 }
 
 /** 前端渲染用消息节点（由 MessageDTO.payload / 事件流构造；id 为本地生成） */

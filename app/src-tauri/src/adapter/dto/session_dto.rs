@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::session_service::{
     CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery, MessageBO,
-    ProjectTokenUsageBO, ProjectTokenUsageQuery, SessionBO, SessionSummaryBO,
+    ProjectTokenUsageBO, ProjectTokenUsageQuery, RestoreSessionCmd, SessionBO, SessionSummaryBO,
 };
 use crate::infra::db::fmt_time;
 
@@ -72,6 +72,20 @@ impl From<DeleteSessionRequest> for DeleteSessionCmd {
         Self {
             session_id: r.session_id,
         }
+    }
+}
+
+/// restore_session 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreSessionRequest {
+    /// 会话 id
+    pub id: i64,
+}
+
+impl From<RestoreSessionRequest> for RestoreSessionCmd {
+    fn from(r: RestoreSessionRequest) -> Self {
+        Self { id: r.id }
     }
 }
 
@@ -218,10 +232,16 @@ pub struct SessionDTO {
     pub tokens: TokenStatDTO,
     /// 消息列表
     pub messages: Vec<MessageDTO>,
+    /// 所属项目名称（回收站列表携带；常规打开为空串）
+    pub project_name: String,
+    /// 所属项目路径（同上）
+    pub project_path: String,
     /// 创建时间
     pub created_at: String,
     /// 更新时间
     pub updated_at: String,
+    /// 删除时间（未删除为 null，回收站展示用）
+    pub deleted_at: Option<String>,
 }
 
 impl From<SessionBO> for SessionDTO {
@@ -236,8 +256,11 @@ impl From<SessionBO> for SessionDTO {
                 output: bo.output_tokens,
             },
             messages: bo.messages.into_iter().map(MessageDTO::from).collect(),
+            project_name: bo.project_name,
+            project_path: bo.project_path,
             created_at: fmt_time(&bo.created_at),
             updated_at: fmt_time(&bo.updated_at),
+            deleted_at: bo.deleted_at.as_ref().map(fmt_time),
         }
     }
 }

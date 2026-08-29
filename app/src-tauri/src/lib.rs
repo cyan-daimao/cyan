@@ -32,6 +32,7 @@ use infra::db::model_repo::ModelRepositoryImpl;
 use infra::db::perm_rule_repo::PermRuleRepositoryImpl;
 use infra::db::plugin_repo::PluginRepositoryImpl;
 use infra::db::project_repo::ProjectRepositoryImpl;
+use infra::db::recycle::RecycleBinRepositoryImpl;
 use infra::db::session_repo::{MessageRepositoryImpl, SessionRepositoryImpl};
 use infra::git::GitCheckpointGateway;
 use infra::llm::OpenAiClient;
@@ -81,7 +82,7 @@ pub fn run() {
                 Arc::new(PermRuleRepositoryImpl::new(pool.clone()));
             let checkpoint_repo = Arc::new(CheckpointRepositoryImpl::new(pool.clone()));
             let plugin_repo: Arc<dyn PluginRepository> =
-                Arc::new(PluginRepositoryImpl::new(pool));
+                Arc::new(PluginRepositoryImpl::new(pool.clone()));
 
             // infra → 端口实现
             let llm: Arc<dyn LlmGateway> = Arc::new(OpenAiClient::new());
@@ -95,6 +96,7 @@ pub fn run() {
                 session_repo.clone(),
                 message_repo.clone(),
                 project_repo.clone(),
+                Arc::new(RecycleBinRepositoryImpl::new(pool.clone())),
             ));
             let project_service: Arc<dyn ProjectService> =
                 Arc::new(ProjectServiceImpl::new(project_repo.clone()));
@@ -149,6 +151,10 @@ pub fn run() {
             session_command::create_session,
             session_command::delete_session,
             session_command::project_token_usage,
+            // 回收站
+            session_command::list_deleted_sessions,
+            session_command::restore_session,
+            session_command::purge_recycle_bin,
             // Agent
             agent_command::send_task,
             agent_command::interrupt_run,

@@ -10,11 +10,13 @@ import {
   FolderOutlined,
   LeftOutlined,
   PlusOutlined,
+  RestOutlined,
   SearchOutlined,
   SettingOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import logoUrl from '../../../assets/logo.png';
+import { RecycleBinModal } from '../../../components/recycle/RecycleBinModal';
 import { SessionItem } from '../../../components/session/SessionItem';
 import { listSessions, deleteSession } from '../../../services/session';
 import { useSessionStore } from '../../../stores/sessionStore';
@@ -72,6 +74,8 @@ export function Sidebar({
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   /** 非当前项目的会话缓存（path → 列表），展开时懒加载 */
   const [otherSessions, setOtherSessions] = useState<Record<string, SessionSummaryDTO[]>>({});
+  /** 回收站弹窗 */
+  const [recycleOpen, setRecycleOpen] = useState(false);
 
   // 搜索防抖 300ms，走后端 list_sessions keyword（作用于当前项目）
   useEffect(() => {
@@ -209,6 +213,9 @@ export function Sidebar({
         <button className="nav-item" onClick={() => onOpenSettings('models')}>
           <SettingOutlined /> 设置
         </button>
+        <button className="nav-item" onClick={() => setRecycleOpen(true)}>
+          <RestOutlined /> 回收站
+        </button>
       </div>
       <div className="session-search">
         <Input
@@ -296,6 +303,7 @@ export function Sidebar({
         </div>
         <div className="perm-line">{PERM_DESC[permMode]}</div>
       </div>
+      <RecycleBinModal open={recycleOpen} onClose={() => setRecycleOpen(false)} />
     </aside>
   );
 }

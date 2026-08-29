@@ -2105,3 +2105,48 @@ pre {
   max-height: calc(100vh - 220px);
   overflow-y: auto;
 }
+
+/* ============ 回收站 ============ */
+.recycle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+
+.recycle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.recycle-row .rc-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.recycle-row .rc-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recycle-row .rc-meta {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+/* ---- 深色 ---- */
+[data-theme='dark'] .recycle-row {
+  background: var(--bg-elev);
+  border-color: var(--border-light);
+  box-shadow: none;
+}

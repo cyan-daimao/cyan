@@ -23,6 +23,10 @@ pub trait SessionRepository: Send + Sync {
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
     /// 按项目聚合 token 用量（输入、输出、会话数，过滤软删）
     async fn sum_tokens_by_project(&self, project_id: i64) -> anyhow::Result<(i64, i64, i64)>;
+    /// 回收站：软删会话列表（deleted_at 非空，按删除时间倒序）
+    async fn list_deleted(&self) -> anyhow::Result<Vec<Session>>;
+    /// 恢复软删会话（清 deleted_at，幂等）
+    async fn restore(&self, id: i64) -> anyhow::Result<()>;
 }
 
 /// 消息仓储
@@ -36,4 +40,13 @@ pub trait MessageRepository: Send + Sync {
     async fn update_payload(&self, id: i64, payload: &str) -> anyhow::Result<()>;
     /// 软删除会话全部消息
     async fn soft_delete_by_session(&self, session_id: i64) -> anyhow::Result<()>;
+    /// 恢复会话全部软删消息（幂等）
+    async fn restore_by_session(&self, session_id: i64) -> anyhow::Result<()>;
+}
+
+/// 回收站仓储（跨表维护：全库软删记录硬删）
+#[async_trait]
+pub trait RecycleBinRepository: Send + Sync {
+    /// 硬删全部 8 张表的软删记录（单事务，FK 顺序），返回总删除行数
+    async fn purge_soft_deleted(&self) -> anyhow::Result<i64>;
 }

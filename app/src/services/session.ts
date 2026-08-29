@@ -17,3 +17,16 @@ export const deleteSession = (sessionId: number) =>
 
 export const projectTokenUsage = (projectPath: string) =>
   call<ProjectTokenUsageDTO>('project_token_usage', { request: { projectPath } });
+
+/* ---- 回收站 ---- */
+
+/** 已删除会话列表（调用风格与 list_sessions 一致） */
+export const listDeletedSessions = () =>
+  call<SessionDTO[]>('list_deleted_sessions', { request: {} });
+
+/** 恢复已删除会话 */
+export const restoreSession = (id: number) =>
+  call<void>('restore_session', { request: { id } });
+
+/** 清空回收站（硬删），返回清理行数 */
+export const purgeRecycleBin = () => call<number>('purge_recycle_bin');

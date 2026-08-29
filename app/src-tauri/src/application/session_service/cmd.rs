@@ -14,6 +14,13 @@ pub struct DeleteSessionCmd {
     pub session_id: i64,
 }
 
+/// 恢复会话命令（回收站）
+#[derive(Debug, Clone)]
+pub struct RestoreSessionCmd {
+    /// 会话 id
+    pub id: i64,
+}
+
 /// 追加消息命令（AgentService 内部复用）
 #[derive(Debug, Clone)]
 pub struct AppendMessageCmd {

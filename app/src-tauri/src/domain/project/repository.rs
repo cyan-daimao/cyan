@@ -19,4 +19,6 @@ pub trait ProjectRepository: Send + Sync {
     async fn touch_last_opened(&self, id: i64) -> anyhow::Result<()>;
     /// 软删除（从最近项目移除，不删磁盘文件与会话记录）
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
+    /// 按 id 查询（含软删；回收站列表需要展示已删项目的会话归属）
+    async fn find_by_id_include_deleted(&self, id: i64) -> anyhow::Result<Option<Project>>;
 }

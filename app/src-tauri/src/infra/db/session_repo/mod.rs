@@ -48,6 +48,7 @@ impl TryFrom<SessionDO> for Session {
             messages: Vec::new(),
             created_at: parse_time(&d.created_at)?,
             updated_at: parse_time(&d.updated_at)?,
+            deleted_at: d.deleted_at.as_deref().map(parse_time).transpose()?,
         })
     }
 }
@@ -219,6 +220,30 @@ impl SessionRepository for SessionRepositoryImpl {
         .await?;
         Ok(row)
     }
+
+    async fn list_deleted(&self) -> anyhow::Result<Vec<Session>> {
+        let rows = sqlx::query_as::<_, SessionDO>(
+            "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens,
+                    created_by, updated_by, created_at, updated_at, deleted_at
+             FROM cyan_session WHERE deleted_at IS NOT NULL
+             ORDER BY deleted_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Session::try_from).collect()
+    }
+
+    async fn restore(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_session SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NOT NULL",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 /// 消息仓储 SQLx 实现
@@ -290,6 +315,18 @@ impl MessageRepository for MessageRepositoryImpl {
              WHERE session_id = ? AND deleted_at IS NULL",
         )
         .bind(fmt_time(&now_local()))
+        .bind(fmt_time(&now_local()))
+        .bind(session_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn restore_by_session(&self, session_id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_message SET deleted_at = NULL, updated_by = 'local', updated_at = ?
+             WHERE session_id = ? AND deleted_at IS NOT NULL",
+        )
         .bind(fmt_time(&now_local()))
         .bind(session_id)
         .execute(&self.pool)

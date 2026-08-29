@@ -145,4 +145,15 @@ impl ProjectRepository for ProjectRepositoryImpl {
         .await?;
         Ok(())
     }
+
+    async fn find_by_id_include_deleted(&self, id: i64) -> anyhow::Result<Option<Project>> {
+        let row = sqlx::query_as::<_, ProjectDO>(
+            "SELECT id, name, path, last_opened_at, created_by, updated_by, created_at, updated_at, deleted_at
+             FROM cyan_project WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(Project::try_from).transpose()
+    }
 }

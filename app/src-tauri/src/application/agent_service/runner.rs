@@ -314,12 +314,72 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-/// 压缩：简化版摘要做截断拼接（不调 LLM），重写消息表并回落 ctx
+/// 截断拼接的兜底摘要（LLM 失败/取消时回落）
+fn fallback_summary(parts: &[String]) -> String {
+    if parts.is_empty() {
+        "早期对话已压缩。".to_string()
+    } else {
+        format!("已压缩 {} 条早期消息，要点：\n- {}", parts.len(), parts.join("\n- "))
+    }
+}
+
+/// 压缩摘要的 LLM 请求消息（纯函数，便于测试）：中文要点式摘要，保留关键决策/TODO/文件路径/错误结论
+fn build_compact_messages(parts: &[String]) -> Vec<ChatMessage> {
+    let joined = parts.join("\n");
+    vec![ChatMessage::text(
+        ChatRole::User,
+        format!(
+            "以下是一段编程助手会话中待压缩的早期消息。请用中文输出要点式摘要（不超过 10 条要点），\
+             必须保留：用户的原始诉求、已做出的关键决策、TODO 事项、涉及的文件路径、错误与结论。\
+             直接输出要点列表，不要寒暄、不要解释。\n\n{joined}"
+        ),
+    )]
+}
+
+/// 调 LLM 生成摘要：收集流但不触发任何对外回调（不推给前端）；失败/取消返回 None 走兜底
+async fn llm_summarize(
+    llm: &Arc<dyn LlmGateway>,
+    model: &ModelConfig,
+    api_key: &str,
+    parts: &[String],
+    cancel: CancellationToken,
+) -> Option<String> {
+    let req = crate::domain::agent::ChatRequest {
+        base_url: model.base_url.clone(),
+        api_key: api_key.to_string(),
+        model: model.name.clone(),
+        messages: build_compact_messages(parts),
+        tools: Vec::new(),
+        max_tokens: Some(1024),
+    };
+    // 收集流但不对外推送：两个独立的空回调（文本与思考都吞掉）
+    let mut noop_text = |_: String| {};
+    let mut noop_thinking = |_: String| {};
+    match llm
+        .stream_chat(&req, &mut noop_text, &mut noop_thinking, cancel)
+        .await
+    {
+        Ok(turn) if !turn.text.trim().is_empty() => Some(turn.text.trim().to_string()),
+        Ok(_) => {
+            tracing::warn!("压缩摘要 LLM 返回空，回落截断拼接");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "压缩摘要 LLM 调用失败，回落截断拼接");
+            None
+        }
+    }
+}
+
+/// 压缩：优先调 LLM 生成摘要（失败回落截断拼接），重写消息表并回落 ctx
 async fn compact_session(
     ctx: &RunContext,
     session: &mut Session,
     llm_messages: &mut Vec<ChatMessage>,
     root: &ProjectPath,
+    model: &ModelConfig,
+    api_key: &str,
+    cancel: CancellationToken,
 ) -> String {
     let total = session.messages.len();
     let tail_start = total.saturating_sub(total * 40 / 100);
@@ -338,15 +398,15 @@ async fn compact_session(
             parts.push(truncate(&piece, 120));
         }
     }
-    let summary_text = if parts.is_empty() {
-        "【压缩摘要】早期对话已压缩。".to_string()
+    let body = if parts.is_empty() {
+        fallback_summary(&parts)
     } else {
-        format!(
-            "【压缩摘要】已压缩 {} 条早期消息，要点：\n- {}",
-            parts.len(),
-            parts.join("\n- ")
-        )
+        match llm_summarize(&ctx.llm, model, api_key, &parts, cancel).await {
+            Some(s) => s,
+            None => fallback_summary(&parts),
+        }
     };
+    let summary_text = format!("【压缩摘要】{body}");
     session.compact(Message::text_payload(&summary_text), now_local());
     // 重写消息表：软删全部后按新序号插入
     if let Err(e) = ctx.message_repo.soft_delete_by_session(session.id).await {
@@ -410,6 +470,7 @@ pub async fn run_loop(
             model: model.name.clone(),
             messages: llm_messages.clone(),
             tools: tools.clone(),
+            max_tokens: None,
         };
         let mut turn_opt = None;
         for attempt in 0..LLM_MAX_RETRY {
@@ -758,7 +819,16 @@ pub async fn run_loop(
 
         // ---- ctx ≥ 90% → 自动压缩 ----
         if session.should_compact(COMPACT_THRESHOLD) {
-            let summary = compact_session(&ctx, &mut session, &mut llm_messages, &root).await;
+            let summary = compact_session(
+                &ctx,
+                &mut session,
+                &mut llm_messages,
+                &root,
+                &model,
+                &api_key,
+                cancel.clone(),
+            )
+            .await;
             ctx.sink.emit(AgentEvent::Compacted {
                 session_id,
                 summary,
@@ -780,6 +850,7 @@ pub async fn run_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::AssistantTurn;
 
     #[test]
     fn system_prompt_injects_agents_md() {
@@ -800,5 +871,87 @@ mod tests {
         for expected in ["Grep", "Glob", "WebFetch", "MultiEdit", "Read", "Edit", "Write", "Bash"] {
             assert!(names.iter().any(|n| n == expected), "缺少工具：{expected}");
         }
+    }
+
+    #[test]
+    fn build_compact_messages_contains_parts_and_instructions() {
+        let parts = vec!["决定用 sqlite 存储".to_string(), "[Edit] src/db.rs".to_string()];
+        let msgs = build_compact_messages(&parts);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, ChatRole::User);
+        assert!(msgs[0].content.contains("要点式摘要"));
+        assert!(msgs[0].content.contains("TODO"));
+        assert!(msgs[0].content.contains("文件路径"));
+        assert!(msgs[0].content.contains("决定用 sqlite 存储"));
+        assert!(msgs[0].content.contains("[Edit] src/db.rs"));
+    }
+
+    #[test]
+    fn fallback_summary_format() {
+        assert_eq!(fallback_summary(&[]), "早期对话已压缩。");
+        let s = fallback_summary(&["a".into(), "b".into()]);
+        assert!(s.contains("已压缩 2 条早期消息"));
+        assert!(s.contains("- a\n- b"));
+    }
+
+    /// mock LLM：返回固定结果
+    struct MockLlm {
+        result: Result<AssistantTurn, LlmError>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmGateway for MockLlm {
+        async fn stream_chat(
+            &self,
+            _req: &crate::domain::agent::ChatRequest,
+            _on_text: &mut (dyn FnMut(String) + Send + '_),
+            _on_thinking: &mut (dyn FnMut(String) + Send + '_),
+            _cancel: CancellationToken,
+        ) -> Result<AssistantTurn, LlmError> {
+            match &self.result {
+                Ok(t) => Ok(t.clone()),
+                Err(e) => Err(LlmError::Client(e.to_string())),
+            }
+        }
+    }
+
+    fn test_model() -> ModelConfig {
+        ModelConfig::new(
+            "m".into(),
+            "p".into(),
+            "https://example.com/v1".into(),
+            128_000,
+            crate::infra::db::now_local(),
+        )
+    }
+
+    #[tokio::test]
+    async fn llm_summarize_success_uses_llm_text() {
+        let llm: Arc<dyn LlmGateway> = Arc::new(MockLlm {
+            result: Ok(AssistantTurn {
+                text: "- 要点一\n- 要点二".into(),
+                ..Default::default()
+            }),
+        });
+        let parts = vec!["早期消息".to_string()];
+        let out = llm_summarize(&llm, &test_model(), "sk-x", &parts, CancellationToken::new()).await;
+        assert_eq!(out.as_deref(), Some("- 要点一\n- 要点二"));
+    }
+
+    #[tokio::test]
+    async fn llm_summarize_failure_falls_back() {
+        // 调用失败 → None（调用方回落截断拼接）
+        let llm: Arc<dyn LlmGateway> = Arc::new(MockLlm {
+            result: Err(LlmError::Timeout),
+        });
+        let parts = vec!["早期消息".to_string()];
+        let out = llm_summarize(&llm, &test_model(), "sk-x", &parts, CancellationToken::new()).await;
+        assert!(out.is_none());
+        // 空响应 → None
+        let llm: Arc<dyn LlmGateway> = Arc::new(MockLlm {
+            result: Ok(AssistantTurn::default()),
+        });
+        let out = llm_summarize(&llm, &test_model(), "sk-x", &parts, CancellationToken::new()).await;
+        assert!(out.is_none());
     }
 }

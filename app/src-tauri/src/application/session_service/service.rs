@@ -6,14 +6,15 @@ use async_trait::async_trait;
 
 use crate::domain::project::ProjectRepository;
 use crate::domain::session::{
-    Message, MessageKind, MessageRepository, Session, SessionRepository,
+    Message, MessageKind, MessageRepository, RecycleBinRepository, Session, SessionRepository,
 };
 use crate::error::ServiceError;
 use crate::infra::db::now_local;
 
 use super::{
     AppendMessageCmd, CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery,
-    MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, SessionBO, SessionSummaryBO,
+    MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, RestoreSessionCmd, SessionBO,
+    SessionSummaryBO,
 };
 
 /// 会话服务
@@ -34,6 +35,12 @@ pub trait SessionService: Send + Sync {
         &self,
         query: ProjectTokenUsageQuery,
     ) -> Result<ProjectTokenUsageBO, ServiceError>;
+    /// 回收站：软删会话列表（带所属项目名称/路径）
+    async fn list_deleted_sessions(&self) -> Result<Vec<SessionBO>, ServiceError>;
+    /// 恢复会话 + 该会话全部软删消息（幂等）
+    async fn restore_session(&self, cmd: RestoreSessionCmd) -> Result<(), ServiceError>;
+    /// 清空回收站：全库软删记录硬删，返回总删除行数
+    async fn purge_recycle_bin(&self) -> Result<i64, ServiceError>;
 }
 
 /// 会话服务实现
@@ -41,6 +48,7 @@ pub struct SessionServiceImpl {
     session_repo: Arc<dyn SessionRepository>,
     message_repo: Arc<dyn MessageRepository>,
     project_repo: Arc<dyn ProjectRepository>,
+    recycle_repo: Arc<dyn RecycleBinRepository>,
 }
 
 impl SessionServiceImpl {
@@ -49,11 +57,13 @@ impl SessionServiceImpl {
         session_repo: Arc<dyn SessionRepository>,
         message_repo: Arc<dyn MessageRepository>,
         project_repo: Arc<dyn ProjectRepository>,
+        recycle_repo: Arc<dyn RecycleBinRepository>,
     ) -> Self {
         Self {
             session_repo,
             message_repo,
             project_repo,
+            recycle_repo,
         }
     }
 
@@ -131,5 +141,31 @@ impl SessionService for SessionServiceImpl {
             output_tokens,
             session_count,
         })
+    }
+
+    async fn list_deleted_sessions(&self) -> Result<Vec<SessionBO>, ServiceError> {
+        let sessions = self.session_repo.list_deleted().await?;
+        let mut bos = Vec::with_capacity(sessions.len());
+        for s in sessions {
+            let mut bo = SessionBO::from(s);
+            // 项目可能也被软删：含软删查询，找不到给空串
+            if let Ok(Some(p)) = self.project_repo.find_by_id_include_deleted(bo.project_id).await
+            {
+                bo.project_name = p.name;
+                bo.project_path = p.path;
+            }
+            bos.push(bo);
+        }
+        Ok(bos)
+    }
+
+    async fn restore_session(&self, cmd: RestoreSessionCmd) -> Result<(), ServiceError> {
+        self.session_repo.restore(cmd.id).await?;
+        self.message_repo.restore_by_session(cmd.id).await?;
+        Ok(())
+    }
+
+    async fn purge_recycle_bin(&self) -> Result<i64, ServiceError> {
+        Ok(self.recycle_repo.purge_soft_deleted().await?)
     }
 }

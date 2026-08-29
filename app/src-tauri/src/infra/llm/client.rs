@@ -113,6 +113,7 @@ impl LlmGateway for OpenAiClient {
             stream_options: StreamOptions {
                 include_usage: true,
             },
+            max_tokens: req.max_tokens,
         };
         let url = format!("{}/chat/completions", req.base_url);
         let resp = self

@@ -7,6 +7,7 @@ pub mod model_repo;
 pub mod perm_rule_repo;
 pub mod plugin_repo;
 pub mod project_repo;
+pub mod recycle;
 pub mod session_repo;
 
 use chrono::{NaiveDateTime, Timelike};
