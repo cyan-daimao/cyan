@@ -142,7 +142,8 @@ impl LlmGateway for OpenAiClient {
         let mut turn = AssistantTurn::default();
         let mut accs: Vec<ToolCallAcc> = Vec::new();
         let mut stream = resp.bytes_stream();
-        let mut buf = String::new();
+        // 按字节缓冲：多字节 UTF-8 字符可能跨 chunk，整块解码完整行避免截断成 U+FFFD
+        let mut buf: Vec<u8> = Vec::new();
 
         loop {
             if cancel.is_cancelled() {
@@ -154,10 +155,11 @@ impl LlmGateway for OpenAiClient {
             };
             let Some(chunk) = item else { break };
             let bytes = chunk.map_err(map_reqwest_err)?;
-            buf.push_str(&String::from_utf8_lossy(&bytes));
+            buf.extend_from_slice(&bytes);
             // 逐行消费，末尾不完整行留在缓冲
-            while let Some(pos) = buf.find('\n') {
-                let line: String = buf.drain(..=pos).collect();
+            while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
+                let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
+                let line = String::from_utf8_lossy(&line_bytes);
                 let line = line.trim();
                 if line.is_empty() || line.starts_with(':') {
                     continue;
