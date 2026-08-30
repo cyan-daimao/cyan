@@ -2366,3 +2366,38 @@ pre {
 .run-timer .anticon {
   color: var(--brand);
 }
+
+/* ============ 工具实时输出（终端式） ============ */
+.live-term {
+  border-top: 1px solid var(--border-light);
+}
+
+.live-term-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-3);
+  background: var(--bg-side);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.live-term-body {
+  background: var(--code-bg);
+  color: #c9d1d9;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+/* ---- 深色：终端块本身深色，标签行用浮起面以区分 ---- */
+[data-theme='dark'] .live-term-label {
+  background: var(--bg-elev);
+}

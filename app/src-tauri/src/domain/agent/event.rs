@@ -157,6 +157,15 @@ pub enum AgentEvent {
         /// 第几次续跑（从 1 开始）
         round: i64,
     },
+    /// 工具增量输出（Bash 执行期间 stdout/stderr 逐 chunk 推送，终端式滚动）
+    ToolDelta {
+        /// 会话 id
+        session_id: i64,
+        /// 调用 id
+        call_id: String,
+        /// 输出增量（stdout/stderr 合并流）
+        delta: String,
+    },
     /// 运行结束
     RunEnd {
         /// 会话 id

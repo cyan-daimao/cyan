@@ -107,6 +107,13 @@ impl ToolOutput {
 /// 工具执行端口（infra/tools 实现）
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
-    /// 在项目根下执行一次工具调用；执行期错误收敛为 `ToolOutput::error`
-    async fn execute(&self, project: &ProjectPath, call: &ToolCall, cancel: CancellationToken) -> ToolOutput;
+    /// 在项目根下执行一次工具调用；执行期错误收敛为 `ToolOutput::error`。
+    /// `on_output` 为增量输出回调（目前仅 Bash 逐 chunk 回调，其余工具不触发）
+    async fn execute(
+        &self,
+        project: &ProjectPath,
+        call: &ToolCall,
+        cancel: CancellationToken,
+        on_output: &mut (dyn FnMut(String) + Send + '_),
+    ) -> ToolOutput;
 }

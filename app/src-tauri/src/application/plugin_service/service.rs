@@ -531,6 +531,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./migrations")]
+    #[allow(clippy::await_holding_lock)] // 测试锁故意跨 await 持有：串行化端口分配
     async fn sidecar_full_lifecycle(pool: SqlitePool) {
         // python3 可用性检查（无则跳过）
         if std::process::Command::new("python3")
@@ -540,6 +541,8 @@ mod tests {
         {
             return;
         }
+        // 真实起 HTTP 服务的测试串行化（防与其他 sidecar 测试的端口竞争）
+        let _guard = crate::infra::sidecar::tests::http_test_lock();
         let src = tempfile::tempdir().unwrap();
         make_backend_pkg(
             src.path(),

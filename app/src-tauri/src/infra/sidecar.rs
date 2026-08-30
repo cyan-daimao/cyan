@@ -201,8 +201,15 @@ impl SidecarGateway for SidecarManager {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// 进程内测试锁：真实起 HTTP 服务的测试串行化（防端口 probe/spawn 竞争）
+    static HTTP_TEST_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+
+    pub(crate) fn http_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        HTTP_TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     /// 把管理器全部端口占满（段耗尽测试）
     fn exhaust_ports(m: &SidecarManager) {
@@ -277,6 +284,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 测试锁故意跨 await 持有：串行化端口分配
     async fn health_check_with_real_http_server() {
         // python3 可用性检查（CI 无 python3 时跳过）
         if std::process::Command::new("python3")
@@ -286,6 +294,9 @@ mod tests {
         {
             return;
         }
+        // 并行测试下不同 manager 实例可能同时探测到同一空闲端口（probe 与 spawn 之间存在竞争窗口），
+        // 用进程内锁把真实 HTTP 起服务的测试串行化
+        let _guard = http_test_lock();
         let m = SidecarManager::new();
         let tmp = tempfile::tempdir().unwrap();
         let info = m

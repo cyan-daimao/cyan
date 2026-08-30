@@ -236,6 +236,15 @@ pub enum AgentEventDTO {
         /// 第几次续跑（从 1 开始）
         round: i64,
     },
+    /// 工具增量输出（Bash 终端式滚动）
+    ToolDelta {
+        /// 会话 id
+        session_id: i64,
+        /// 调用 id
+        call_id: String,
+        /// 输出增量
+        delta: String,
+    },
     /// 运行结束
     RunEnd {
         /// 会话 id
@@ -337,6 +346,15 @@ impl From<AgentEvent> for AgentEventDTO {
             },
             AgentEvent::Compacted { session_id, summary } => Self::Compacted { session_id, summary },
             AgentEvent::RunContinued { session_id, round } => Self::RunContinued { session_id, round },
+            AgentEvent::ToolDelta {
+                session_id,
+                call_id,
+                delta,
+            } => Self::ToolDelta {
+                session_id,
+                call_id,
+                delta,
+            },
             AgentEvent::RunEnd {
                 session_id,
                 result,

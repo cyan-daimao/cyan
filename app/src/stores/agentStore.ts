@@ -257,7 +257,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           note: evt.note,
           // 后端不携带 outputType，按 unified diff 头推断
           outputType: evt.output.startsWith('@@') ? 'diff' : 'code',
+          // 执行结束：清空实时缓冲，照常用最终 output 渲染
+          liveOutput: undefined,
         });
+        break;
+      case 'tool_delta':
+        // 工具执行中实时输出（Bash 等），只对激活会话更新
+        if (!isActive) break;
+        ss.appendToolDelta(evt.callId, evt.delta);
         break;
       case 'approval_required':
         mark('waiting_approval');

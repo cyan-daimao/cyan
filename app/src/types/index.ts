@@ -106,6 +106,8 @@ export type ChatNode =
       outputType?: 'code' | 'diff' | 'text';
       output?: string;
       note?: string;
+      /** 工具执行中实时输出（tool_delta 内存态缓冲，上限 50KB 截头；tool_end 后清空） */
+      liveOutput?: string;
     }
   | {
       id: string;
@@ -239,6 +241,7 @@ export type AgentEvent =
   | { type: 'text_delta'; sessionId: number; delta: string }
   | { type: 'thinking_delta'; sessionId: number; delta: string }
   | { type: 'tool_start'; sessionId: number; callId: string; tool: string; arg: string }
+  | { type: 'tool_delta'; sessionId: number; callId: string; delta: string }
   | {
       type: 'tool_end';
       sessionId: number;

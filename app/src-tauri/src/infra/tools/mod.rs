@@ -25,13 +25,15 @@ impl ToolExecutor for BuiltinToolExecutor {
         project: &ProjectPath,
         call: &ToolCall,
         cancel: CancellationToken,
+        on_output: &mut (dyn FnMut(String) + Send + '_),
     ) -> ToolOutput {
         match call.tool.as_str() {
             "Read" => exec_read(project, call),
             "Write" => exec_write(project, call),
             "Edit" => exec_edit(project, call),
             "MultiEdit" => exec_multi_edit(project, call),
-            "Bash" => exec_bash(project, call, cancel).await,
+            // Bash：stdout/stderr 增量经 on_output 回调（终端式滚动）
+            "Bash" => exec_bash(project, call, cancel, on_output).await,
             "Grep" => exec_grep(project, call),
             "Glob" => exec_glob(project, call),
             "WebFetch" => exec_web_fetch(call).await,
@@ -290,7 +292,12 @@ async fn exec_web_fetch(call: &ToolCall) -> ToolOutput {
     }
 }
 
-async fn exec_bash(project: &ProjectPath, call: &ToolCall, cancel: CancellationToken) -> ToolOutput {
+async fn exec_bash(
+    project: &ProjectPath,
+    call: &ToolCall,
+    cancel: CancellationToken,
+    on_output: &mut (dyn FnMut(String) + Send + '_),
+) -> ToolOutput {
     let command = match arg_str(call, "command") {
         Ok(p) => p,
         Err(e) => return ToolOutput::error(e),
@@ -302,7 +309,7 @@ async fn exec_bash(project: &ProjectPath, call: &ToolCall, cancel: CancellationT
         .map(Duration::from_secs)
         .map(|d| d.min(MAX_BASH_TIMEOUT))
         .unwrap_or(process::DEFAULT_BASH_TIMEOUT);
-    match process::run_bash(project.root(), command, timeout, cancel).await {
+    match process::run_bash(project.root(), command, timeout, cancel, on_output).await {
         Ok(out) => {
             let mut text = out.stdout;
             if !out.stderr.is_empty() {
@@ -348,6 +355,7 @@ mod tests {
                 &project,
                 &call("Write", json!({"path": "a.txt", "content": "hello\nworld\n"}), "a.txt"),
                 CancellationToken::new(),
+                &mut |_: String| {},
             )
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Ok);
@@ -360,12 +368,13 @@ mod tests {
                 &project,
                 &call("Edit", json!({"path": "a.txt", "old_string": "world", "new_string": "cyan"}), "a.txt"),
                 CancellationToken::new(),
+                &mut |_: String| {},
             )
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Ok);
 
         let out = executor
-            .execute(&project, &call("Read", json!({"path": "a.txt"}), "a.txt"), CancellationToken::new())
+            .execute(&project, &call("Read", json!({"path": "a.txt"}), "a.txt"), CancellationToken::new(), &mut |_: String| {})
             .await;
         assert_eq!(out.output, "hello\ncyan\n");
     }
@@ -379,6 +388,7 @@ mod tests {
                 &project,
                 &call("Write", json!({"path": "../evil.txt", "content": "x"}), "../evil.txt"),
                 CancellationToken::new(),
+                &mut |_: String| {},
             )
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Error);
@@ -393,6 +403,7 @@ mod tests {
                 &project,
                 &call("Bash", json!({"command": "pwd"}), "pwd"),
                 CancellationToken::new(),
+                &mut |_: String| {},
             )
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Ok);
@@ -442,6 +453,7 @@ mod tests {
                     "a.txt",
                 ),
                 CancellationToken::new(),
+                &mut |_: String| {},
             )
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Error);
@@ -462,6 +474,7 @@ mod tests {
                     "a.txt",
                 ),
                 CancellationToken::new(),
+                &mut |_: String| {},
             )
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Ok);
@@ -478,13 +491,13 @@ mod tests {
         let project = ProjectPath::new(tmp.path()).unwrap();
 
         let out = BuiltinToolExecutor
-            .execute(&project, &call("Glob", json!({"pattern": "**/*.rs"}), "**/*.rs"), CancellationToken::new())
+            .execute(&project, &call("Glob", json!({"pattern": "**/*.rs"}), "**/*.rs"), CancellationToken::new(), &mut |_: String| {})
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Ok);
         assert_eq!(out.output, "src/a.rs");
 
         let out = BuiltinToolExecutor
-            .execute(&project, &call("Grep", json!({"pattern": "main"}), "main"), CancellationToken::new())
+            .execute(&project, &call("Grep", json!({"pattern": "main"}), "main"), CancellationToken::new(), &mut |_: String| {})
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Ok);
         assert!(out.output.contains("src/a.rs:1: fn main() {}"));
@@ -496,7 +509,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project = ProjectPath::new(tmp.path()).unwrap();
         let out = BuiltinToolExecutor
-            .execute(&project, &call("WebFetch", json!({"url": "not-a-url"}), "not-a-url"), CancellationToken::new())
+            .execute(&project, &call("WebFetch", json!({"url": "not-a-url"}), "not-a-url"), CancellationToken::new(), &mut |_: String| {})
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Error);
     }

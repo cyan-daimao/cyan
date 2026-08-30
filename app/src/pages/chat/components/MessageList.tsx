@@ -158,6 +158,7 @@ function MessageNode({ node, index, total }: MessageNodeProps) {
           outputType={node.outputType}
           output={node.output}
           note={node.note}
+          liveOutput={node.liveOutput}
         />
       );
     case 'approval':

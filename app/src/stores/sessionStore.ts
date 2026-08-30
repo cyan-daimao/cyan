@@ -142,8 +142,16 @@ interface SessionState {
   endStreaming: () => void;
   updateTool: (
     callId: string,
-    patch: { status: ToolStatus; output?: string; note?: string; outputType?: 'code' | 'diff' | 'text' },
+    patch: {
+      status: ToolStatus;
+      output?: string;
+      note?: string;
+      outputType?: 'code' | 'diff' | 'text';
+      liveOutput?: string;
+    },
   ) => void;
+  /** tool_delta：把 stdout/stderr 增量 append 到运行中工具卡的实时缓冲（50KB 截头） */
+  appendToolDelta: (callId: string, delta: string) => void;
   updateApproval: (callId: string, state: Exclude<ApprovalState, 'pending'>) => void;
 
   /* ---- 行内编辑（编辑即截断重发） ---- */
@@ -361,6 +369,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       messages: get().messages.map((n) =>
         n.kind === 'tool' && n.callId === callId ? { ...n, ...patch } : n,
       ),
+    });
+  },
+
+  appendToolDelta: (callId, delta) => {
+    const LIVE_CAP = 50 * 1024; // 实时缓冲上限 50KB，超出保留尾部（截头）
+    set({
+      messages: get().messages.map((n) => {
+        if (n.kind !== 'tool' || n.callId !== callId || n.status !== 'running') return n;
+        let live = (n.liveOutput ?? '') + delta;
+        if (live.length > LIVE_CAP) live = live.slice(live.length - LIVE_CAP);
+        return { ...n, liveOutput: live };
+      }),
     });
   },
 

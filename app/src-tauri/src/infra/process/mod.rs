@@ -90,12 +90,14 @@ pub struct BashOutput {
     pub cancelled: bool,
 }
 
-/// 执行 Bash 命令：cwd 为项目根；超时或 cancel 时 kill 子进程
+/// 执行 Bash 命令：cwd 为项目根；超时或 cancel 时 kill 子进程。
+/// `on_output` 逐 chunk 回调 stdout/stderr 增量（合并流，不区分来源），供前端终端式滚动。
 pub async fn run_bash(
     root: &Path,
     command: &str,
     timeout: Duration,
     cancel: CancellationToken,
+    on_output: &mut (dyn FnMut(String) + Send + '_),
 ) -> anyhow::Result<BashOutput> {
     let start = Instant::now();
     let mut child = tokio::process::Command::new("bash")
@@ -108,53 +110,93 @@ pub async fn run_bash(
         .kill_on_drop(true)
         .spawn()?;
 
-    // stdout/stderr 交给读取任务，主任务只等退出/超时/取消，保证能拿到 &mut child 做 kill
-    let mut stdout_pipe = child
+    let stdout_pipe = child
         .stdout
         .take()
         .ok_or_else(|| anyhow::anyhow!("无法捕获子进程 stdout"))?;
-    let mut stderr_pipe = child
+    let stderr_pipe = child
         .stderr
         .take()
         .ok_or_else(|| anyhow::anyhow!("无法捕获子进程 stderr"))?;
-    let stdout_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf).await;
-        buf
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buf).await;
-        buf
-    });
+
+    // 读取任务把 chunk 送入通道，主循环增量回调（stdout/stderr 合并为一个流）
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(bool, Vec<u8>)>();
+    let stdout_task = spawn_pipe_reader(stdout_pipe, false, tx.clone());
+    let stderr_task = spawn_pipe_reader(stderr_pipe, true, tx.clone());
+    drop(tx);
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
 
     enum Ended {
         Done(Option<i32>),
         Timeout,
         Cancelled,
     }
-    let ended = tokio::select! {
-        status = child.wait() => Ended::Done(status?.code()),
-        _ = tokio::time::sleep(timeout) => Ended::Timeout,
-        _ = cancel.cancelled() => Ended::Cancelled,
-    };
+    let mut ended: Option<Ended> = None;
+    loop {
+        // select 分支的 wait future 只存活当次迭代，handler 里不直接碰 child，借 select 结束后再 kill
+        let mut kill_needed = false;
+        tokio::select! {
+            chunk = rx.recv() => {
+                let Some((is_stderr, bytes)) = chunk else { break }; // 两条管道都关闭
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                if is_stderr {
+                    stderr.push_str(&text);
+                } else {
+                    stdout.push_str(&text);
+                }
+                on_output(text);
+            }
+            status = child.wait(), if ended.is_none() => {
+                ended = Some(Ended::Done(status?.code()));
+            }
+            _ = tokio::time::sleep(timeout), if ended.is_none() => {
+                ended = Some(Ended::Timeout);
+                kill_needed = true;
+            }
+            _ = cancel.cancelled(), if ended.is_none() => {
+                ended = Some(Ended::Cancelled);
+                kill_needed = true;
+            }
+        }
+        if kill_needed {
+            let _ = child.start_kill();
+        }
+        // 超时/取消：kill 后收掉缓冲里残留的 chunk 就退出（不等管道被孙进程拖住）
+        if matches!(ended, Some(Ended::Timeout | Ended::Cancelled)) {
+            let _ = child.wait().await;
+            while let Ok((is_stderr, bytes)) = rx.try_recv() {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                if is_stderr {
+                    stderr.push_str(&text);
+                } else {
+                    stdout.push_str(&text);
+                }
+                on_output(text);
+            }
+            break;
+        }
+    }
+    // 管道先于 wait 分支关闭的兜底：收尸并取退出码
+    if ended.is_none() {
+        let status = child.wait().await?;
+        ended = Some(Ended::Done(status.code()));
+    }
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
 
     let (exit_code, timed_out, cancelled, stderr_note) = match ended {
-        Ended::Done(code) => (code, false, false, None),
-        Ended::Timeout => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            (None, true, false, Some(format!("命令超时（{}s）已被终止", timeout.as_secs())))
-        }
-        Ended::Cancelled => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            (None, false, true, Some("任务已中断，子进程已终止".to_string()))
-        }
+        Some(Ended::Done(code)) => (code, false, false, None),
+        Some(Ended::Timeout) => (
+            None,
+            true,
+            false,
+            Some(format!("命令超时（{}s）已被终止", timeout.as_secs())),
+        ),
+        Some(Ended::Cancelled) => (None, false, true, Some("任务已中断，子进程已终止".to_string())),
+        None => unreachable!(),
     };
-
-    let stdout = String::from_utf8_lossy(&stdout_task.await.unwrap_or_default()).into_owned();
-    let mut stderr = String::from_utf8_lossy(&stderr_task.await.unwrap_or_default()).into_owned();
     if let Some(note) = stderr_note {
         stderr = note;
     }
@@ -169,6 +211,27 @@ pub async fn run_bash(
     // 审计日志（TECH_DESIGN 6.6：命令、决断、退出码、耗时）
     audit_log(command, &result, start.elapsed()).await;
     Ok(result)
+}
+
+/// 管道读取任务：逐 chunk（≤8KB）送入通道
+fn spawn_pipe_reader(
+    mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+    is_stderr: bool,
+    tx: tokio::sync::mpsc::UnboundedSender<(bool, Vec<u8>)>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; 8192];
+        loop {
+            match pipe.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send((is_stderr, buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    })
 }
 
 /// 追加审计日志到 `~/.cyan/logs/audit.log`
@@ -228,11 +291,13 @@ mod tests {
     #[tokio::test]
     async fn run_echo() {
         let tmp = tempfile::tempdir().unwrap();
+        let mut noop = |_: String| {};
         let out = run_bash(
             tmp.path(),
             "echo hello",
             Duration::from_secs(10),
             CancellationToken::new(),
+            &mut noop,
         )
         .await
         .unwrap();
@@ -243,11 +308,13 @@ mod tests {
     #[tokio::test]
     async fn run_timeout_kills_child() {
         let tmp = tempfile::tempdir().unwrap();
+        let mut noop = |_: String| {};
         let out = run_bash(
             tmp.path(),
             "sleep 30",
             Duration::from_millis(200),
             CancellationToken::new(),
+            &mut noop,
         )
         .await
         .unwrap();
@@ -264,9 +331,61 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
             t2.cancel();
         });
-        let out = run_bash(tmp.path(), "sleep 30", Duration::from_secs(60), token)
+        let mut noop = |_: String| {};
+        let out = run_bash(tmp.path(), "sleep 30", Duration::from_secs(60), token, &mut noop)
             .await
             .unwrap();
         assert!(out.cancelled);
+    }
+
+    #[tokio::test]
+    async fn streams_stdout_chunks_incrementally() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 多段输出 + 间隔 sleep：每段应各触发一次（或多次）回调
+        let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let c2 = chunks.clone();
+        let mut on_output = move |s: String| c2.lock().unwrap().push(s);
+        let out = run_bash(
+            tmp.path(),
+            "printf 'aaa'; sleep 0.2; printf 'bbb'; sleep 0.2; printf 'ccc'",
+            Duration::from_secs(10),
+            CancellationToken::new(),
+            &mut on_output,
+        )
+        .await
+        .unwrap();
+        let got = chunks.lock().unwrap().clone();
+        assert!(got.len() >= 2, "多段输出应触发多次回调，实际 {} 次", got.len());
+        // 回调拼接 = 最终 stdout
+        assert_eq!(got.concat(), out.stdout);
+        assert_eq!(out.stdout, "aaabbbccc");
+    }
+
+    #[tokio::test]
+    async fn cancel_keeps_partial_output_callback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let token = CancellationToken::new();
+        let t2 = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            t2.cancel();
+        });
+        let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let c2 = chunks.clone();
+        let mut on_output = move |s: String| c2.lock().unwrap().push(s);
+        let out = run_bash(
+            tmp.path(),
+            "printf 'partial'; sleep 30",
+            Duration::from_secs(60),
+            token,
+            &mut on_output,
+        )
+        .await
+        .unwrap();
+        assert!(out.cancelled);
+        // 已产生的输出照常回调并带回
+        assert!(chunks.lock().unwrap().concat().contains("partial"));
+        assert!(out.stdout.contains("partial"));
+        assert_eq!(out.stderr, "任务已中断，子进程已终止");
     }
 }

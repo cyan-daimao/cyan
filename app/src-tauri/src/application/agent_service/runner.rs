@@ -894,7 +894,19 @@ pub async fn run_loop(
                         Err(e) => ToolOutput::error(e.to_string()),
                     }
                 } else {
-                    ctx.executor.execute(&root, &call, cancel.clone()).await
+                    // Bash 等内置工具：增量输出实时推 ToolDelta（终端式滚动）
+                    let sink_delta = ctx.sink.clone();
+                    let call_id_delta = call.call_id.clone();
+                    let mut on_output = move |delta: String| {
+                        sink_delta.emit(AgentEvent::ToolDelta {
+                            session_id,
+                            call_id: call_id_delta.clone(),
+                            delta,
+                        });
+                    };
+                    ctx.executor
+                        .execute(&root, &call, cancel.clone(), &mut on_output)
+                        .await
                 };
                 ctx.sink.emit(AgentEvent::ToolEnd {
                     session_id,
@@ -1488,6 +1500,7 @@ mod tests {
             _project: &ProjectPath,
             _call: &ToolCall,
             _cancel: CancellationToken,
+            _on_output: &mut (dyn FnMut(String) + Send + '_),
         ) -> ToolOutput {
             self.calls.fetch_add(1, Ordering::SeqCst);
             ToolOutput::ok("read content")
