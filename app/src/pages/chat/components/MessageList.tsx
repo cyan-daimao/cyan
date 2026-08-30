@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import { Button } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
@@ -23,8 +23,11 @@ interface MessageNodeProps {
 /**
  * 消息节点。仅 user 文本消息支持行内编辑（编辑即截断重发）：
  * 编辑第 i 条会物理删除其后所有消息，并自动以新文本重发。
+ *
+ * memo：流式输出时 messages 数组每帧更新，历史节点对象不可变（浅比较命中）
+ * → 每帧只重渲染真正变化的流式节点，避免可见区全部节点（含 ReactMarkdown 重解析）每帧重渲染导致闪烁。
  */
-function MessageNode({ node, index, total }: MessageNodeProps) {
+const MessageNode = memo(function MessageNode({ node, index, total }: MessageNodeProps) {
   const decide = useAgentStore((s) => s.decide);
   const activeId = useSessionStore((s) => s.activeId);
   /** 当前会话运行中（含等待审批）时禁用编辑 */
@@ -173,7 +176,7 @@ function MessageNode({ node, index, total }: MessageNodeProps) {
         />
       );
   }
-}
+});
 
 interface MessageListProps {
   messages: ChatNode[];
