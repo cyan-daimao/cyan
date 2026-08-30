@@ -227,12 +227,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     switch (evt.type) {
       case 'text_delta':
         if (!isActive) break;
-        set({ phase: 'streaming' });
+        if (get().phase !== 'streaming') set({ phase: 'streaming' });
         ss.appendDelta(evt.delta);
         break;
       case 'thinking_delta':
         if (!isActive) break;
-        set({ phase: 'streaming' });
+        if (get().phase !== 'streaming') set({ phase: 'streaming' });
         ss.appendThinkingDelta(evt.delta);
         break;
       case 'tool_start':

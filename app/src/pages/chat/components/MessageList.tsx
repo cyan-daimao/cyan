@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import { Button } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
@@ -179,9 +179,27 @@ interface MessageListProps {
   messages: ChatNode[];
 }
 
+/** 流式期间稳定不重建：virtuoso 的 components 若每次渲染都是新对象，
+ *  会让虚拟列表内部结构随每帧 token 更新整帧重建（表现为输出时页面不断刷新）。 */
+const ListHeader = () => <div style={{ height: 24 }} />;
+
 /** 消息流：react-virtuoso 虚拟列表（长会话不卡），自动跟随底部 */
 export function MessageList({ messages }: MessageListProps) {
   const phase = useAgentStore((s) => s.phase);
+  // Footer 闭包 phase；仅 phase 变化时重建 components，token 级更新不触发
+  const components = useMemo(
+    () => ({
+      Header: ListHeader,
+      // 发送后到首个响应之间在消息流末尾渲染「正在思考…」气泡
+      Footer: () => (
+        <div className="chat-inner" style={{ paddingTop: 0, paddingBottom: 0 }}>
+          {phase === 'thinking' ? <ThinkingBubble /> : null}
+          <div style={{ height: 24 }} />
+        </div>
+      ),
+    }),
+    [phase],
+  );
   return (
     <Virtuoso
       data={messages}
@@ -195,16 +213,7 @@ export function MessageList({ messages }: MessageListProps) {
           <MessageNode node={node} index={index} total={messages.length} />
         </div>
       )}
-      components={{
-        Header: () => <div style={{ height: 24 }} />,
-        // 发送后到首个响应之间在消息流末尾渲染「正在思考…」气泡
-        Footer: () => (
-          <div className="chat-inner" style={{ paddingTop: 0, paddingBottom: 0 }}>
-            {phase === 'thinking' ? <ThinkingBubble /> : null}
-            <div style={{ height: 24 }} />
-          </div>
-        ),
-      }}
+      components={components}
     />
   );
 }
