@@ -113,6 +113,18 @@ impl Session {
         self.ctx_percent = ctx_percent.clamp(0, 100);
     }
 
+    /// 清空上下文：内存消息全清 + token/ctx 统计归零。返回被清掉的消息数。
+    /// 持久层由 service 同步硬删 message/checkpoint（/clear 语义：不可恢复，不进回收站）。
+    pub fn clear_context(&mut self, now: NaiveDateTime) -> usize {
+        let removed = self.messages.len();
+        self.messages.clear();
+        self.ctx_percent = 0;
+        self.input_tokens = 0;
+        self.output_tokens = 0;
+        self.updated_at = now;
+        removed
+    }
+
     /// 重命名会话：trim 后 1..=80 字符，长度越界/空串报错；
     /// 同值（trim 后相等）跳过不变更 updated_at（幂等）。
     pub fn rename_title(&mut self, title: &str, now: NaiveDateTime) -> Result<(), String> {
@@ -198,5 +210,24 @@ mod tests {
         assert_eq!(s.title.chars().count(), 20);
         s.apply_first_task_title("第二条任务不应覆盖标题");
         assert!(s.title.starts_with("帮我修复"));
+    }
+
+    #[test]
+    fn clear_context_resets_state() {
+        let mut s = Session::new(1, NaiveDateTime::default());
+        s.id = 3;
+        s.append_message(msg(3, MessageKind::User, "u1"));
+        s.append_message(msg(3, MessageKind::Assistant, "a1"));
+        s.ctx_percent = 88;
+        s.input_tokens = 120_000;
+        s.output_tokens = 9_800;
+        let removed = s.clear_context(NaiveDateTime::default());
+        assert_eq!(removed, 2);
+        assert!(s.messages.is_empty());
+        assert_eq!(s.ctx_percent, 0);
+        assert_eq!(s.input_tokens, 0);
+        assert_eq!(s.output_tokens, 0);
+        // 空会话再清一次：0，幂等
+        assert_eq!(s.clear_context(NaiveDateTime::default()), 0);
     }
 }

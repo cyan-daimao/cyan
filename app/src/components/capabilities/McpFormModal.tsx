@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Form, Input } from 'antd';
+import { Alert, Button, Form, Input, Space } from 'antd';
 import type { McpServerDTO } from '../../types';
 import { useConfigStore } from '../../stores/configStore';
 import { toast } from '../../utils/feedback';
@@ -11,11 +11,35 @@ interface McpFormModalProps {
   onClose: () => void;
 }
 
+interface FormValues {
+  name: string;
+  command: string;
+}
+
+/** 常用 MCP 服务器预设：点击一键填充（对齐 ModelFormModal 风格） */
+const PRESET_SERVERS = [
+  {
+    name: 'websearch',
+    command: 'npx -y open-websearch@latest',
+    desc: '联网搜索（多引擎免 key：bing/baidu/duckduckgo/csdn/juejin）',
+  },
+  {
+    name: 'github',
+    command: 'npx -y @modelcontextprotocol/server-github',
+    desc: 'GitHub 仓库/Issue/PR 读写',
+  },
+  {
+    name: 'filesystem',
+    command: 'npx -y @modelcontextprotocol/server-filesystem /path/to/dir',
+    desc: '扩展目录文件访问（需改路径）',
+  },
+] as const;
+
 /** MCP 服务器表单（PRD 7.2：name 唯一，command 必填） */
 export function McpFormModal({ open, editing, onClose }: McpFormModalProps) {
   const servers = useConfigStore((s) => s.mcpServers);
   const saveMcpServer = useConfigStore((s) => s.saveMcpServer);
-  const [form] = Form.useForm<{ name: string; command: string }>();
+  const [form] = Form.useForm<FormValues>();
   const [saving, setSaving] = useState(false);
   const isEdit = editing !== null;
 
@@ -25,8 +49,13 @@ export function McpFormModal({ open, editing, onClose }: McpFormModalProps) {
     }
   }, [open, editing, form]);
 
+  /** 点击预设：一键填充名称与命令 */
+  const applyPreset = (p: (typeof PRESET_SERVERS)[number]) => {
+    form.setFieldsValue({ name: p.name, command: p.command });
+  };
+
   const onOk = async () => {
-    let values: { name: string; command: string };
+    let values: FormValues;
     try {
       values = await form.validateFields();
     } catch {
@@ -51,6 +80,17 @@ export function McpFormModal({ open, editing, onClose }: McpFormModalProps) {
       onOk={() => void onOk()}
     >
       <Form form={form} layout="vertical" preserve={false}>
+        {!isEdit && (
+          <Form.Item label="常用服务器（点击一键填充）">
+            <Space size={[8, 8]} wrap>
+              {PRESET_SERVERS.map((p) => (
+                <Button key={p.name} size="small" title={p.desc} onClick={() => applyPreset(p)}>
+                  {p.name}
+                </Button>
+              ))}
+            </Space>
+          </Form.Item>
+        )}
         <Form.Item
           name="name"
           label="服务器名称"
@@ -89,7 +129,7 @@ export function McpFormModal({ open, editing, onClose }: McpFormModalProps) {
         <Alert
           type="info"
           showIcon
-          message="保存后会尝试拉起子进程并握手，失败会标记为「连接失败」。"
+          message="保存后会尝试拉起子进程并握手，失败会标记为「连接失败」。工具以 mcp__<服务器名>__<工具名> 注入。"
         />
       </Form>
     </FormModal>

@@ -153,6 +153,16 @@ fn builtin_tools() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "WebSearch".into(),
+            description: "联网搜索（DuckDuckGo，免 key 兜底引擎），返回编号结果列表（标题+URL+摘要）。用于查最新版本/API 变更/技术方案等时效性问题。拿到结果后通常配合 WebFetch 读取具体页面。注意：若存在 mcp__* 搜索类工具（如 open-webSearch/wigolo 注入的多引擎搜索），优先使用那些工具".into(),
+            parameters: obj(
+                json!({
+                    "query": {"type": "string", "description": "搜索关键词"},
+                }),
+                &["query"],
+            ),
+        },
+        ToolSpec {
             name: "Bash".into(),
             description: "在项目根目录执行 Bash 命令".into(),
             parameters: obj(
@@ -922,7 +932,7 @@ mod tests {
     #[test]
     fn builtin_tools_include_new_tools() {
         let names: Vec<String> = builtin_tools().iter().map(|t| t.name.clone()).collect();
-        for expected in ["Grep", "Glob", "WebFetch", "MultiEdit", "Read", "Edit", "Write", "Bash"] {
+        for expected in ["Grep", "Glob", "WebFetch", "WebSearch", "MultiEdit", "Read", "Edit", "Write", "Bash", "TodoWrite"] {
             assert!(names.iter().any(|n| n == expected), "缺少工具：{expected}");
         }
     }

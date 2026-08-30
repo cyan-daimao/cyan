@@ -110,21 +110,35 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
 
   const suggestOpen = matches.length > 0 && !suggestClosed;
 
-  /** 选中技能：草稿替换为技能正文（$ARGUMENTS 原样保留），聚焦输入框 */
+  /** 选中技能：输入框仅保留 `/id ` 标记（不塞全文），发送时由 onSend 展开为技能正文 */
   const pickSkill = (s: SkillDTO) => {
-    onDraftChange(s.content);
-    setSuggestClosed(true);
+    onDraftChangeWrap(`/${s.id} `);
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
+  /** 统一的草稿更新：重置补全状态 */
   const onDraftChangeWrap = (v: string) => {
     onDraftChange(v);
     setSuggestClosed(false);
     setActiveIdx(0);
   };
 
+  /**
+   * 发送前展开技能引用：`/id 参数` → 技能正文（$ARGUMENTS 替换为参数）。
+   * 未匹配到技能则原样发送（安全降级）。
+   */
+  const expandSkillRef = (raw: string): string => {
+    const m = raw.match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
+    if (!m) return raw;
+    const skill = skills.find((s) => s.id === m[1] && s.enabled);
+    if (!skill) return raw;
+    const args = (m[2] ?? '').trim();
+    return skill.content.replace(/\$ARGUMENTS/g, args);
+  };
+
   const onSend = async () => {
-    const accepted = await send(draft);
+    const expanded = expandSkillRef(draft.trim());
+    const accepted = await send(expanded);
     if (accepted) onDraftChangeWrap('');
   };
 

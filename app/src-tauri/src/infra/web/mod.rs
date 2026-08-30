@@ -1,5 +1,6 @@
-//! WebFetch：reqwest（rustls）GET 抓取网页文本，超时 30s，HTML 简单去标签，截断 ~20KB。
-//! 网络访问仅此一处，协议适配不出层。
+//! WebFetch / WebSearch：reqwest（rustls）网络访问，协议适配不出层。
+
+pub mod search;
 
 use std::time::Duration;
 
