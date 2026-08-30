@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::application::session_service::{
-    CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery, MessageBO,
-    ProjectTokenUsageBO, ProjectTokenUsageQuery, RenameSessionCmd, RestoreSessionCmd,
+    ClearSessionCmd, CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery,
+    MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, RenameSessionCmd, RestoreSessionCmd,
     SessionBO, SessionSummaryBO,
 };
 use crate::infra::db::fmt_time;
@@ -144,6 +144,20 @@ impl From<RenameSessionRequest> for RenameSessionCmd {
             id: r.id,
             title: r.title,
         }
+    }
+}
+
+/// clear_session 请求（/clear）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearSessionRequest {
+    /// 会话 id
+    pub session_id: i64,
+}
+
+impl From<ClearSessionRequest> for ClearSessionCmd {
+    fn from(r: ClearSessionRequest) -> Self {
+        Self { session_id: r.session_id }
     }
 }
 

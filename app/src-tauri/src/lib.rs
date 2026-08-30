@@ -105,6 +105,7 @@ pub fn run() {
                 project_repo.clone(),
                 Arc::new(RecycleBinRepositoryImpl::new(pool.clone())),
                 model_repo.clone(),
+                checkpoint_repo.clone(),
             ));
             let project_service: Arc<dyn ProjectService> = Arc::new(ProjectServiceImpl::new(
                 project_repo.clone(),
@@ -188,6 +189,7 @@ pub fn run() {
             session_command::edit_message,
             session_command::set_session_model,
             session_command::rename_session,
+            session_command::clear_session,
             // Agent
             agent_command::send_task,
             agent_command::interrupt_run,

@@ -306,6 +306,19 @@ impl SessionRepository for SessionRepositoryImpl {
         }
         Ok(())
     }
+
+    async fn reset_usage(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE cyan_session SET ctx_percent = 0, input_tokens = 0, output_tokens = 0,
+                    updated_by = 'local', updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(fmt_time(&now_local()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 /// 消息仓储 SQLx 实现
@@ -412,6 +425,15 @@ impl MessageRepository for MessageRepositoryImpl {
         let rows = sqlx::query("DELETE FROM cyan_message WHERE session_id = ? AND seq > ?")
             .bind(session_id)
             .bind(seq)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(rows)
+    }
+
+    async fn hard_delete_by_session(&self, session_id: i64) -> anyhow::Result<u64> {
+        let rows = sqlx::query("DELETE FROM cyan_message WHERE session_id = ?")
+            .bind(session_id)
             .execute(&self.pool)
             .await?
             .rows_affected();
@@ -556,5 +578,43 @@ mod tests {
         // 清除 → None
         repo.set_preferred_model(s.id, None).await.unwrap();
         assert_eq!(repo.find_by_id(s.id).await.unwrap().unwrap().preferred_model, None);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn reset_usage_and_hard_delete_by_session(pool: SqlitePool) {
+        let project_id = seed_project(&pool).await;
+        let session_repo = SessionRepositoryImpl::new(pool.clone());
+        let msg_repo = MessageRepositoryImpl::new(pool.clone());
+
+        let mut s = Session::new(project_id, now_local());
+        s.update_usage(1000, 500, 80);
+        session_repo.insert(&mut s).await.unwrap();
+        for i in 1..=3 {
+            let mut m = Message::new(
+                s.id,
+                MessageKind::User,
+                Message::text_payload(&format!("m{i}")),
+                now_local(),
+            );
+            m.seq = i;
+            msg_repo.insert(&mut m).await.unwrap();
+        }
+
+        // 硬删全部消息：返回 3，且物理消失（软删也不存在）
+        let deleted = msg_repo.hard_delete_by_session(s.id).await.unwrap();
+        assert_eq!(deleted, 3);
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM cyan_message WHERE session_id = ?")
+            .bind(s.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(total.0, 0, "硬删后包括软删行都不应存在");
+
+        // reset_usage：统计归零
+        session_repo.reset_usage(s.id).await.unwrap();
+        let loaded = session_repo.find_by_id(s.id).await.unwrap().unwrap();
+        assert_eq!(loaded.input_tokens, 0);
+        assert_eq!(loaded.output_tokens, 0);
+        assert_eq!(loaded.ctx_percent, 0);
     }
 }

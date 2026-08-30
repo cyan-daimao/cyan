@@ -413,7 +413,11 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(items.len(), 8);
+        assert_eq!(
+            items.len(),
+            crate::infra::mcp_registry::featured_servers().len(),
+            "空关键字应返回全部精选"
+        );
         assert!(items.iter().all(|i| i.source == "featured"));
         assert!(items.iter().all(|i| i.command.is_some()));
         assert!(items.iter().any(|i| i.name == "context7"));

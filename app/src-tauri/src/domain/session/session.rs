@@ -113,14 +113,13 @@ impl Session {
         self.ctx_percent = ctx_percent.clamp(0, 100);
     }
 
-    /// 清空上下文：内存消息全清 + token/ctx 统计归零。返回被清掉的消息数。
-    /// 持久层由 service 同步硬删 message/checkpoint（/clear 语义：不可恢复，不进回收站）。
+    /// 清空上下文（/clear）：移除全部消息、token/ctx 统计归零，返回移除的消息数；幂等
     pub fn clear_context(&mut self, now: NaiveDateTime) -> usize {
         let removed = self.messages.len();
         self.messages.clear();
-        self.ctx_percent = 0;
         self.input_tokens = 0;
         self.output_tokens = 0;
+        self.ctx_percent = 0;
         self.updated_at = now;
         removed
     }
@@ -213,21 +212,23 @@ mod tests {
     }
 
     #[test]
-    fn clear_context_resets_state() {
+    fn clear_context_resets_usage_and_removes_messages() {
         let mut s = Session::new(1, NaiveDateTime::default());
-        s.id = 3;
-        s.append_message(msg(3, MessageKind::User, "u1"));
-        s.append_message(msg(3, MessageKind::Assistant, "a1"));
-        s.ctx_percent = 88;
-        s.input_tokens = 120_000;
-        s.output_tokens = 9_800;
+        s.id = 5;
+        s.append_message(msg(5, MessageKind::User, "u1"));
+        s.append_message(msg(5, MessageKind::Assistant, "a1"));
+        s.input_tokens = 1234;
+        s.output_tokens = 567;
+        s.ctx_percent = 42;
+
         let removed = s.clear_context(NaiveDateTime::default());
         assert_eq!(removed, 2);
         assert!(s.messages.is_empty());
-        assert_eq!(s.ctx_percent, 0);
         assert_eq!(s.input_tokens, 0);
         assert_eq!(s.output_tokens, 0);
-        // 空会话再清一次：0，幂等
+        assert_eq!(s.ctx_percent, 0);
+
+        // 幂等：再清一次返回 0
         assert_eq!(s.clear_context(NaiveDateTime::default()), 0);
     }
 }

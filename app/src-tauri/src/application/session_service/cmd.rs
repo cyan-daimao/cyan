@@ -48,6 +48,13 @@ pub struct RenameSessionCmd {
     pub title: String,
 }
 
+/// 清空会话上下文命令（/clear）：物理删除全部消息 + checkpoint，统计归零
+#[derive(Debug, Clone)]
+pub struct ClearSessionCmd {
+    /// 会话 id
+    pub session_id: i64,
+}
+
 /// 追加消息命令（AgentService 内部复用）
 #[derive(Debug, Clone)]
 pub struct AppendMessageCmd {

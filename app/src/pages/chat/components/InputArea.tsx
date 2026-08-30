@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Segmented, Select, Tag, Tooltip } from 'antd';
 import {
   ArrowUpOutlined,
+  ClearOutlined,
   LoadingOutlined,
   PlusOutlined,
   ReadOutlined,
@@ -84,6 +85,7 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
   const project = useProjectStore((s) => s.current);
   const skills = useSkillStore((s) => s.skills);
   const loadSkills = useSkillStore((s) => s.load);
+  const clearSessionInStore = useSessionStore((s) => s.clearSession);
   const [activeIdx, setActiveIdx] = useState(0);
   const [suggestClosed, setSuggestClosed] = useState(false);
 
@@ -93,12 +95,25 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.path]);
 
-  /** 补全候选：草稿以 / 开头时，按 id/名称/描述过滤已启用技能 */
+  /** /clear 内置命令（非磁盘技能） */
+  const CLEAR_SKILL: SkillDTO = {
+    id: 'clear',
+    name: '清空上下文',
+    description: '删除本会话全部消息与工具记录，从零开始（不可恢复）',
+    enabled: true,
+    source: 'global',
+    pluginName: null,
+    marketRepo: null,
+    content: '',
+  };
+
+  /** 补全候选：内置 /clear + 按 id/名称/描述过滤已启用技能 */
   const matches = useMemo<SkillDTO[]>(() => {
     if (!draft.startsWith('/')) return [];
     const kw = draft.slice(1).toLowerCase();
     if (kw.includes('\n')) return [];
-    return skills.filter(
+    const builtin = 'clear'.startsWith(kw) ? [CLEAR_SKILL] : [];
+    const filtered = skills.filter(
       (s) =>
         s.enabled &&
         (!kw ||
@@ -106,14 +121,37 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
           s.name.toLowerCase().includes(kw) ||
           s.description.toLowerCase().includes(kw)),
     );
+    return [...builtin, ...filtered];
   }, [draft, skills]);
 
   const suggestOpen = matches.length > 0 && !suggestClosed;
 
-  /** 选中技能：输入框仅保留 `/id ` 标记（不塞全文），发送时由 onSend 展开为技能正文 */
+  /** 选中候选：/clear 直接执行清空（confirm 确认），其余技能填入 /id 标记 */
   const pickSkill = (s: SkillDTO) => {
+    if (s.id === 'clear') {
+      setSuggestClosed(true);
+      void doClear();
+      return;
+    }
     onDraftChangeWrap(`/${s.id} `);
     setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  /** 执行清空上下文：需有激活会话；confirm 防误触 */
+  const doClear = async () => {
+    const sid = useSessionStore.getState().activeId;
+    if (sid === null) {
+      toast.warning('请先开始一个对话');
+      return;
+    }
+    if (!window.confirm('确定清空本会话的全部上下文吗？消息与工具记录将被删除且不可恢复。')) {
+      return;
+    }
+    const removed = await clearSessionInStore(sid);
+    if (removed !== null) {
+      toast.success(`已清空上下文（删除 ${removed} 条消息）`);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    }
   };
 
   /** 统一的草稿更新：重置补全状态 */
@@ -137,6 +175,12 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
   };
 
   const onSend = async () => {
+    // /clear 命令：清空上下文而非发送
+    if (draft.trim() === '/clear') {
+      onDraftChangeWrap('');
+      void doClear();
+      return;
+    }
     const expanded = expandSkillRef(draft.trim());
     const accepted = await send(expanded);
     if (accepted) onDraftChangeWrap('');
@@ -224,6 +268,16 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
           >
             <SafetyOutlined /> 规则
           </button>
+          <Tooltip title="清空上下文（/clear）">
+            <button
+              className="icon-btn"
+              title="清空本会话全部上下文"
+              disabled={activeId === null || sessionBusy}
+              onClick={() => void doClear()}
+            >
+              <ClearOutlined />
+            </button>
+          </Tooltip>
           <div style={{ flex: 1 }} />
           {sessionBusy && startedAt !== undefined ? (
             <span className="run-timer" title="已执行时长">

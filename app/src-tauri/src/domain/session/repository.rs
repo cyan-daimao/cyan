@@ -21,6 +21,8 @@ pub trait SessionRepository: Send + Sync {
     async fn update(&self, session: &Session) -> anyhow::Result<()>;
     /// 仅更新标题 + updated_at（轻量重命名；同值不写盘）
     async fn update_title(&self, id: i64, title: &str) -> anyhow::Result<()>;
+    /// 重置 token 统计与 ctx 占用为 0 并刷新 updated_at（/clear 用）
+    async fn reset_usage(&self, id: i64) -> anyhow::Result<()>;
     /// 软删除
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
     /// 按项目聚合 token 用量（输入、输出、会话数，过滤软删）
@@ -54,6 +56,8 @@ pub trait MessageRepository: Send + Sync {
     async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<Message>>;
     /// 物理删除同会话 seq 更大的所有消息（编辑截断重发），返回删除行数
     async fn hard_delete_after(&self, session_id: i64, seq: i64) -> anyhow::Result<u64>;
+    /// 物理删除会话全部消息（/clear 语义：上下文不可恢复，不进回收站），返回删除行数
+    async fn hard_delete_by_session(&self, session_id: i64) -> anyhow::Result<u64>;
     /// 窗口级联软删：项目下所有会话的消息（统一 deleted_at 时间戳）
     async fn soft_delete_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()>;
     /// 窗口级联恢复：仅还原 deleted_at == 窗口时间戳的消息

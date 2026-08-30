@@ -1,6 +1,4 @@
-//! WebFetch / WebSearch：reqwest（rustls）网络访问，协议适配不出层。
-
-pub mod search;
+//! WebFetch：reqwest（rustls）网络访问，协议适配不出层。
 
 use std::time::Duration;
 

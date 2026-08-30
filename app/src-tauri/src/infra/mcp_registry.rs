@@ -48,6 +48,7 @@ pub fn featured_servers() -> Vec<McpMarketItem> {
         featured("memory", "Memory", "知识图谱式长期记忆", "npx -y @modelcontextprotocol/server-memory", "modelcontextprotocol/servers"),
         featured("fetch", "Fetch", "网页抓取转 Markdown", "uvx mcp-server-fetch", "modelcontextprotocol/servers"),
         featured("time", "Time", "时间与时区换算", "uvx mcp-server-time", "modelcontextprotocol/servers"),
+        featured("websearch", "Open-WebSearch", "多引擎联网搜索（免 key，默认 Bing，支持 baidu/sogou 等，大陆可达）", "npx -y open-websearch@latest", "Aas-ee/open-webSearch"),
     ]
 }
 
@@ -178,12 +179,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn featured_servers_eight_verified_items() {
+    fn featured_servers_nine_verified_items() {
         let items = featured_servers();
-        assert_eq!(items.len(), 8);
+        assert_eq!(items.len(), 9);
         assert!(items.iter().all(|i| i.command.is_some() && i.source == "featured"));
         assert!(items.iter().any(|i| i.command.as_deref() == Some("npx -y @upstash/context7-mcp")));
         assert!(items.iter().any(|i| i.command.as_deref() == Some("uvx mcp-server-fetch")));
+        assert!(items.iter().any(|i| i.command.as_deref() == Some("npx -y open-websearch@latest")));
     }
 
     #[test]

@@ -26,9 +26,10 @@ pub use plugin_dto::{
 pub use project_dto::{CreateProjectRequest, OpenProjectRequest, ProjectDTO, RemoveProjectRequest};
 pub use recycle_dto::{ProjectRecycleDTO, RecycleBinDTO, RestoreRecycleItemRequest};
 pub use session_dto::{
-    CreateSessionRequest, DeleteSessionRequest, GetSessionRequest, ListSessionRequest, MessageDTO,
-    ProjectTokenUsageDTO, ProjectTokenUsageRequest, RenameSessionRequest, RestoreSessionRequest,
-    EditMessageRequest, SessionDTO, SessionSummaryDTO, SetSessionModelRequest,
+    ClearSessionRequest, CreateSessionRequest, DeleteSessionRequest, GetSessionRequest,
+    ListSessionRequest, MessageDTO, ProjectTokenUsageDTO, ProjectTokenUsageRequest,
+    RenameSessionRequest, RestoreSessionRequest, EditMessageRequest, SessionDTO,
+    SessionSummaryDTO, SetSessionModelRequest,
 };
 pub use skill_dto::{
     DeleteSkillRequest, InstallSkillFromGithubRequest, ListSkillRequest, SaveSkillRequest,

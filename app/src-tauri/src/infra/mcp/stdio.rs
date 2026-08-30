@@ -15,6 +15,7 @@ use super::jsonrpc::{
     parse_tools, shell_split, Dispatcher,
 };
 use super::{McpClient, McpError, McpTool};
+use crate::infra::process::{extended_path, resolve_program};
 
 /// stdio MCP 客户端（initialize 握手完成 + tools/list 已缓存）
 pub(crate) struct StdioClient {
@@ -30,11 +31,15 @@ impl StdioClient {
     /// spawn 子进程并完成 initialize → notifications/initialized → tools/list 握手
     pub async fn connect(command: &str) -> Result<Self, McpError> {
         let parts = shell_split(command);
-        let (prog, args) = parts
+        let (raw_prog, args) = parts
             .split_first()
             .ok_or_else(|| McpError::Spawn("启动命令为空".into()))?;
-        let mut child = Command::new(prog)
+        // GUI（Dock/Finder）启动时进程 PATH 只含系统目录：先解析程序绝对路径，
+        // 再给子进程补全 PATH（npx/uvx 等脚本的 shebang `env node` 依赖它）
+        let prog = resolve_program(raw_prog);
+        let mut child = Command::new(&prog)
             .args(args)
+            .env("PATH", extended_path())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())

@@ -10,7 +10,7 @@ use crate::domain::agent::{
     AgentEvent, AgentRun, ApprovalDecision, CancellationToken, ChangeInfo, ChatMessage, ChatRole,
     ChatToolCall, Checkpoint, CheckpointRepository, LlmError, LlmGateway, PermMode,
     PermissionEngine, RunEventSink, RunResult, TodoItem, TokenUsage, ToolCall, ToolExecutor,
-    ToolOutput, ToolSpec,
+    ToolOutput, ToolOutputStatus, ToolSpec,
 };
 use crate::domain::config::{ModelConfig, PermAction, PermRuleRepository, PermissionRule};
 use crate::domain::session::{Message, MessageKind, MessageRepository, Session, SessionRepository, COMPACT_THRESHOLD};
@@ -31,6 +31,59 @@ fn continuation_prompt(max_iters: usize) -> String {
 /// 续跑用户可见提示（落系统消息 + RunContinued 事件；纯函数便于测试）
 fn continuation_note(max_iters: usize, round: i64) -> String {
     format!("⏳ 已执行 {max_iters} 轮工具调用，任务未完成，自动继续执行（第 {round} 次续跑）")
+}
+
+/// 连续重复调用中止阈值（同一调用连续 6 次）
+const DUP_ABORT_AFTER: usize = 6;
+
+/// 重复调用拦截文案（不再真正执行，结果与上文相同；纯函数便于测试）
+fn dup_intercept_text() -> &'static str {
+    "⚠️ 重复调用已拦截：该工具以相同参数刚执行过，结果与上文相同，请基于已有结果继续；如需不同结果请调整参数。"
+}
+
+/// 循环中止系统提示（纯函数便于测试）
+fn dup_abort_note(times: usize) -> String {
+    format!("🛑 检测到重复工具调用循环（同一调用连续 {times} 次），已自动中止。建议更换更强的模型或调整任务描述后重试。")
+}
+
+/// 重复调用判定
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DupVerdict {
+    /// 正常执行
+    Proceed,
+    /// 拦截（不执行，回写拦截说明）
+    Intercept,
+    /// 中止运行（循环检测）
+    Abort,
+}
+
+/// 重复工具调用护栏：追踪最近一次调用签名与连续重复次数（内置工具与 mcp__ 统一生效）
+#[derive(Default)]
+struct DupCallGuard {
+    /// 最近一次执行的调用签名（tool, arg）
+    last_sig: Option<(String, String)>,
+    /// 连续重复次数（首次为 0）
+    dup_count: usize,
+}
+
+impl DupCallGuard {
+    /// 判定一次调用：签名与上次相同 → 重复计数 +1；不同 → 清零并更新签名
+    fn check(&mut self, tool: &str, arg: &str) -> DupVerdict {
+        let sig = (tool.to_string(), arg.to_string());
+        if self.last_sig.as_ref() == Some(&sig) {
+            self.dup_count += 1;
+        } else {
+            self.last_sig = Some(sig);
+            self.dup_count = 0;
+        }
+        if self.dup_count >= DUP_ABORT_AFTER - 1 {
+            DupVerdict::Abort
+        } else if self.dup_count >= 1 {
+            DupVerdict::Intercept
+        } else {
+            DupVerdict::Proceed
+        }
+    }
 }
 
 /// 审批超时（10 分钟，超时按 reject 处理）
@@ -153,16 +206,6 @@ fn builtin_tools() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "WebSearch".into(),
-            description: "联网搜索（DuckDuckGo，免 key 兜底引擎），返回编号结果列表（标题+URL+摘要）。用于查最新版本/API 变更/技术方案等时效性问题。拿到结果后通常配合 WebFetch 读取具体页面。注意：若存在 mcp__* 搜索类工具（如 open-webSearch/wigolo 注入的多引擎搜索），优先使用那些工具".into(),
-            parameters: obj(
-                json!({
-                    "query": {"type": "string", "description": "搜索关键词"},
-                }),
-                &["query"],
-            ),
-        },
-        ToolSpec {
             name: "Bash".into(),
             description: "在项目根目录执行 Bash 命令".into(),
             parameters: obj(
@@ -200,7 +243,7 @@ fn builtin_tools() -> Vec<ToolSpec> {
 fn system_prompt(root: &ProjectPath) -> String {
     let mut prompt = format!(
         "你是 cyan，一个运行在用户桌面的 AI 编程 Agent。项目根目录：{}。\n\
-         通过工具完成任务：Read/Grep/Glob 查代码、Edit/MultiEdit/Write 改文件、Bash 执行命令、TodoWrite 维护 TODO、WebFetch 读取公开网页。\n\
+         通过工具完成任务：Read/Grep/Glob 查代码、Edit/MultiEdit/Write 改文件、Bash 执行命令、TodoWrite 维护 TODO、WebFetch 读取公开网页、联网搜索优先使用 mcp__* 搜索类工具（如 open-webSearch 注入的多引擎搜索）。\n\
          所有文件路径使用相对项目根的相对路径。修改前先 Read 了解上下文。",
         root.root().display()
     );
@@ -495,6 +538,8 @@ pub async fn run_loop(
     // 续跑计数：每 MAX_ITERS 轮注入一次提醒并无限续跑（无总轮次上限）
     let mut iter = 0usize;
     let mut continuations = 0i64;
+    // 重复工具调用护栏（弱模型循环刷同一调用时拦截/中止）
+    let mut dup_guard = DupCallGuard::default();
 
     'outer: loop {
         if iter >= MAX_ITERS {
@@ -649,6 +694,63 @@ pub async fn run_loop(
         // ---- 逐个处理工具调用 ----
         for tc in turn.tool_calls {
             let call = tool_call_from(tc);
+            // ---- 重复调用护栏：判定在执行/审批之前（重复调用不触发审批弹窗）----
+            match dup_guard.check(&call.tool, &call.arg) {
+                DupVerdict::Abort => {
+                    // 连续重复达阈值：落系统提示 + 错误收尾
+                    let note = dup_abort_note(DUP_ABORT_AFTER);
+                    persist_message(
+                        &ctx,
+                        &mut session,
+                        MessageKind::System,
+                        Message::text_payload(&note),
+                    )
+                    .await;
+                    result = RunResult::Error("重复工具调用循环，已自动中止".into());
+                    completed = true;
+                    break 'outer;
+                }
+                DupVerdict::Intercept => {
+                    // 不再真正执行：回写拦截说明（照常落库 + ToolStart/ToolEnd 事件）
+                    ctx.sink.emit(AgentEvent::ToolStart {
+                        session_id,
+                        call_id: call.call_id.clone(),
+                        tool: call.tool.clone(),
+                        arg: call.arg.clone(),
+                    });
+                    let output = dup_intercept_text().to_string();
+                    ctx.sink.emit(AgentEvent::ToolEnd {
+                        session_id,
+                        call_id: call.call_id.clone(),
+                        status: ToolOutputStatus::Ok.as_str().to_string(),
+                        output: output.clone(),
+                        note: Some("重复调用已拦截".to_string()),
+                    });
+                    persist_message(
+                        &ctx,
+                        &mut session,
+                        MessageKind::Tool,
+                        json!({
+                            "callId": call.call_id,
+                            "tool": call.tool,
+                            "arg": call.arg,
+                            "status": ToolOutputStatus::Ok.as_str(),
+                            "output": output,
+                            "note": "重复调用已拦截",
+                        })
+                        .to_string(),
+                    )
+                    .await;
+                    llm_messages.push(ChatMessage {
+                        role: ChatRole::Tool,
+                        content: dup_intercept_text().to_string(),
+                        tool_calls: Vec::new(),
+                        tool_call_id: Some(call.call_id),
+                    });
+                    continue;
+                }
+                DupVerdict::Proceed => {}
+            }
             let decision = engine.decide(&call.tool, &call.arg);
             let mut deny_reason: Option<String> = None;
 
@@ -932,7 +1034,7 @@ mod tests {
     #[test]
     fn builtin_tools_include_new_tools() {
         let names: Vec<String> = builtin_tools().iter().map(|t| t.name.clone()).collect();
-        for expected in ["Grep", "Glob", "WebFetch", "WebSearch", "MultiEdit", "Read", "Edit", "Write", "Bash", "TodoWrite"] {
+        for expected in ["Grep", "Glob", "WebFetch", "MultiEdit", "Read", "Edit", "Write", "Bash", "TodoWrite"] {
             assert!(names.iter().any(|n| n == expected), "缺少工具：{expected}");
         }
     }
@@ -1233,7 +1335,7 @@ mod tests {
 
     // ---- 自动续跑：每 25 轮注入提醒，无轮次上限跑到完成 ----
 
-    /// 前 N 次调用返回工具调用、之后返回纯文本完成的 LLM（验证无轮次上限的持续续跑）
+    /// 前 N 次调用返回工具调用（参数逐轮变化，避开重复调用护栏）、之后返回纯文本完成的 LLM
     struct FiniteToolCallLlm {
         /// 返回工具调用的轮数（之后完成）
         tool_call_rounds: usize,
@@ -1262,9 +1364,9 @@ mod tests {
             if n < self.tool_call_rounds {
                 Ok(AssistantTurn {
                     tool_calls: vec![ChatToolCall {
-                        id: "c1".into(),
+                        id: format!("c{n}"),
                         name: "Read".into(),
-                        arguments: "{\"path\":\"nope.txt\"}".into(),
+                        arguments: format!("{{\"path\":\"f{n}.txt\"}}"),
                     }],
                     ..Default::default()
                 })
@@ -1340,5 +1442,249 @@ mod tests {
         let note = continuation_note(25, 3);
         assert!(note.contains("已执行 25 轮"));
         assert!(note.contains("第 3 次续跑"));
+    }
+
+    // ---- 重复工具调用护栏 ----
+
+    #[test]
+    fn dup_call_guard_verdicts() {
+        let mut g = DupCallGuard::default();
+        // 首次：正常执行
+        assert_eq!(g.check("Read", "a.rs"), DupVerdict::Proceed);
+        // 第 2-5 次连续相同：拦截
+        for _ in 0..(DUP_ABORT_AFTER - 2) {
+            assert_eq!(g.check("Read", "a.rs"), DupVerdict::Intercept);
+        }
+        // 第 6 次连续相同：中止
+        assert_eq!(g.check("Read", "a.rs"), DupVerdict::Abort);
+        // 穿插不同调用会重置计数
+        let mut g = DupCallGuard::default();
+        g.check("Read", "a.rs");
+        g.check("Read", "a.rs"); // dup 1
+        g.check("Read", "b.rs"); // 重置
+        assert_eq!(g.check("Read", "b.rs"), DupVerdict::Intercept);
+        // mcp 工具同样生效
+        let mut g = DupCallGuard::default();
+        g.check("mcp__fs__read", "x");
+        assert_eq!(g.check("mcp__fs__read", "x"), DupVerdict::Intercept);
+    }
+
+    #[test]
+    fn dup_guard_texts() {
+        assert!(dup_intercept_text().contains("重复调用已拦截"));
+        assert!(dup_abort_note(6).contains("连续 6 次"));
+    }
+
+    /// 计数执行器：记录真实执行次数
+    #[derive(Default)]
+    struct CountingExecutor {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl ToolExecutor for CountingExecutor {
+        async fn execute(
+            &self,
+            _project: &ProjectPath,
+            _call: &ToolCall,
+            _cancel: CancellationToken,
+        ) -> ToolOutput {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            ToolOutput::ok("read content")
+        }
+    }
+
+    /// 手工组装 RunContext（执行器/mcp 可替换；复用真 sqlite 仓储）
+    async fn build_guard_ctx(
+        pool: &SqlitePool,
+        llm: Arc<dyn LlmGateway>,
+        executor: Arc<dyn ToolExecutor>,
+        sink: Arc<dyn RunEventSink>,
+    ) -> (RunContext, Session, ProjectPath, tempfile::TempDir) {
+        let pid = sqlx::query(
+            "INSERT INTO cyan_project (name, path, created_by, updated_by, created_at, updated_at)
+             VALUES ('demo', '/tmp/demo-guard', 'local', 'local', '2026-08-30 10:00:00', '2026-08-30 10:00:00')",
+        )
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        let session_repo: Arc<dyn SessionRepository> =
+            Arc::new(SessionRepositoryImpl::new(pool.clone()));
+        let message_repo: Arc<dyn MessageRepository> =
+            Arc::new(MessageRepositoryImpl::new(pool.clone()));
+        let mut session = Session::new(pid, now_local());
+        session_repo.insert(&mut session).await.unwrap();
+        let mut m = Message::new(
+            session.id,
+            MessageKind::User,
+            Message::text_payload("读文件"),
+            now_local(),
+        );
+        message_repo.insert(&mut m).await.unwrap();
+        session.messages = message_repo.list_by_session(session.id).await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let root = ProjectPath::new(tmp.path()).unwrap();
+        let mcp: Arc<dyn McpGateway> = Arc::new(MockMcpGateway {
+            tools: vec![],
+            calls: Mutex::new(vec![]),
+            fail: false,
+        });
+        let ctx = RunContext {
+            session_repo,
+            message_repo,
+            checkpoint_repo: Arc::new(CheckpointRepositoryImpl::new(pool.clone())),
+            perm_repo: Arc::new(PermRuleRepositoryImpl::new(pool.clone())),
+            llm,
+            executor,
+            sink,
+            mcp,
+        };
+        (ctx, session, root, tmp)
+    }
+
+    fn test_model_cfg() -> ModelConfig {
+        ModelConfig::new("m".into(), "p".into(), "https://x.dev".into(), 128_000, now_local())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn dup_loop_intercepts_then_aborts(pool: SqlitePool) {
+        // LLM 永远返回同一 Read 调用（弱模型循环）
+        let llm = Arc::new(LoopForeverLlm2);
+        let executor = Arc::new(CountingExecutor::default());
+        let sink = Arc::new(RecordingSink::default());
+        let (ctx, session, root, _tmp) =
+            build_guard_ctx(&pool, llm, executor.clone(), sink.clone()).await;
+        let session_id = session.id;
+        let run = Arc::new(AgentRun::new(session_id));
+        run.start().unwrap();
+        run_loop(ctx, run, session, root, test_model_cfg(), "sk".into(), vec![], PermMode::Auto, vec![]).await;
+
+        // 底层 executor 只被真实调用 1 次（第 2 次起拦截）
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        // 连续 6 次后中止：run_end error + 系统消息落库
+        let events: Vec<AgentEvent> = sink.events.lock().unwrap().clone();
+        let run_end = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::RunEnd { result, .. } => Some(result.clone()),
+                _ => None,
+            })
+            .expect("应有 run_end");
+        match run_end {
+            RunResult::Error(m) => assert!(m.contains("重复工具调用循环")),
+            other => panic!("应为 Error，实际 {other:?}"),
+        }
+        let msg_repo = MessageRepositoryImpl::new(pool.clone());
+        let msgs = msg_repo.list_by_session(session_id).await.unwrap();
+        let sys_notes = msgs
+            .iter()
+            .filter(|m| {
+                m.kind == MessageKind::System
+                    && m.text().map(|t| t.contains("重复工具调用循环")).unwrap_or(false)
+            })
+            .count();
+        assert_eq!(sys_notes, 1, "应落一条循环中止系统消息");
+        // 拦截文案进入工具消息（第 2-5 次拦截）
+        let intercepted = msgs
+            .iter()
+            .filter(|m| {
+                m.kind == MessageKind::Tool
+                    && m.text().is_none()
+                    && m.payload.contains("重复调用已拦截")
+            })
+            .count();
+        assert_eq!(intercepted, DUP_ABORT_AFTER - 2, "第 2-5 次应被拦截");
+    }
+
+    /// 永远返回同一 Read 调用的 LLM（护栏测试专用）
+    struct LoopForeverLlm2;
+
+    #[async_trait::async_trait]
+    impl LlmGateway for LoopForeverLlm2 {
+        async fn stream_chat(
+            &self,
+            _req: &crate::domain::agent::ChatRequest,
+            _on_text: &mut (dyn FnMut(String) + Send + '_),
+            _on_thinking: &mut (dyn FnMut(String) + Send + '_),
+            _cancel: CancellationToken,
+        ) -> Result<AssistantTurn, LlmError> {
+            Ok(AssistantTurn {
+                tool_calls: vec![ChatToolCall {
+                    id: "c1".into(),
+                    name: "Read".into(),
+                    arguments: "{\"path\":\"same.txt\"}".into(),
+                }],
+                ..Default::default()
+            })
+        }
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn alternating_calls_reset_dup_count(pool: SqlitePool) {
+        // LLM 交替两个不同参数调用 10 轮后完成：计数被重置，不触发拦截/中止
+        let llm = Arc::new(AlternatingLlm::default());
+        let executor = Arc::new(CountingExecutor::default());
+        let sink = Arc::new(RecordingSink::default());
+        let (ctx, session, root, _tmp) =
+            build_guard_ctx(&pool, llm, executor.clone(), sink.clone()).await;
+        let run = Arc::new(AgentRun::new(session.id));
+        run.start().unwrap();
+        run_loop(ctx, run, session, root, test_model_cfg(), "sk".into(), vec![], PermMode::Auto, vec![]).await;
+
+        // 每次都真实执行（无拦截）
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 10);
+        let events: Vec<AgentEvent> = sink.events.lock().unwrap().clone();
+        let run_end = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::RunEnd { result, .. } => Some(result.clone()),
+                _ => None,
+            })
+            .expect("应有 run_end");
+        assert!(matches!(run_end, RunResult::Done), "交替调用应正常完成");
+        // 无拦截消息
+        let intercepted: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM cyan_message WHERE payload LIKE '%重复调用已拦截%' AND deleted_at IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(intercepted.0, 0);
+    }
+
+    /// 交替两个参数的 LLM：前 10 轮交替 a.txt/b.txt，之后完成
+    #[derive(Default)]
+    struct AlternatingLlm {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmGateway for AlternatingLlm {
+        async fn stream_chat(
+            &self,
+            _req: &crate::domain::agent::ChatRequest,
+            _on_text: &mut (dyn FnMut(String) + Send + '_),
+            _on_thinking: &mut (dyn FnMut(String) + Send + '_),
+            _cancel: CancellationToken,
+        ) -> Result<AssistantTurn, LlmError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < 10 {
+                let path = if n % 2 == 0 { "a.txt" } else { "b.txt" };
+                Ok(AssistantTurn {
+                    tool_calls: vec![ChatToolCall {
+                        id: format!("c{n}"),
+                        name: "Read".into(),
+                        arguments: format!("{{\"path\":\"{path}\"}}"),
+                    }],
+                    ..Default::default()
+                })
+            } else {
+                Ok(AssistantTurn {
+                    text: "完成".into(),
+                    ..Default::default()
+                })
+            }
+        }
     }
 }

@@ -35,7 +35,6 @@ impl ToolExecutor for BuiltinToolExecutor {
             "Grep" => exec_grep(project, call),
             "Glob" => exec_glob(project, call),
             "WebFetch" => exec_web_fetch(call).await,
-            "WebSearch" => exec_web_search(call).await,
             "TodoWrite" => ToolOutput::ok("todo list updated"),
             other => ToolOutput::error(format!("未知工具：{other}")),
         }
@@ -287,17 +286,6 @@ async fn exec_web_fetch(call: &ToolCall) -> ToolOutput {
     };
     match web::fetch_url(url).await {
         Ok(text) => ToolOutput::ok(text),
-        Err(e) => ToolOutput::error(e.to_string()),
-    }
-}
-
-async fn exec_web_search(call: &ToolCall) -> ToolOutput {
-    let query = match arg_str(call, "query") {
-        Ok(q) => q,
-        Err(e) => return ToolOutput::error(e),
-    };
-    match web::search::search(query).await {
-        Ok(hits) => ToolOutput::ok(web::search::format_results(&hits)),
         Err(e) => ToolOutput::error(e.to_string()),
     }
 }

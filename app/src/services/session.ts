@@ -58,3 +58,7 @@ export const editMessage = (id: number, text: string) =>
 /** 重命名会话标题（trim 后 1..=80 字符；幂等） */
 export const renameSession = (id: number, title: string) =>
   call<void>('rename_session', { request: { id, title } });
+
+/** 清空会话上下文（/clear）：硬删全部消息与 checkpoint，统计归零；返回清除的消息数 */
+export const clearSession = (sessionId: number) =>
+  call<number>('clear_session', { request: { sessionId } });

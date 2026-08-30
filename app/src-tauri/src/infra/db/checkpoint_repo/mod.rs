@@ -142,6 +142,15 @@ impl CheckpointRepository for CheckpointRepositoryImpl {
         Ok(())
     }
 
+    async fn hard_delete_by_session(&self, session_id: i64) -> anyhow::Result<u64> {
+        let rows = sqlx::query("DELETE FROM cyan_checkpoint WHERE session_id = ?")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(rows)
+    }
+
     async fn soft_delete_by_project_window(&self, project_id: i64, deleted_at: &str) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE cyan_checkpoint SET deleted_at = ?, updated_by = 'local', updated_at = ?

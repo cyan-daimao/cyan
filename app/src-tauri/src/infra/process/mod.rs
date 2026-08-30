@@ -1,6 +1,6 @@
 //! Bash 执行：tokio::process + 超时 + CancellationToken kill + 审计日志。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tokio::io::AsyncReadExt;
@@ -11,6 +11,69 @@ use super::db::datasource::cyan_home;
 
 /// 默认 Bash 超时（2 分钟）
 pub const DEFAULT_BASH_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 返回工具搜索目录（去重）：现有 PATH + HOME 下常见安装位置 + 系统级目录。
+/// GUI 应用（Dock/Finder/launchd 启动）的进程 PATH 只含系统目录
+/// （/usr/bin:/bin:/usr/sbin:/sbin），npx/node/uvx/cargo 等用户安装的工具解析不到。
+pub fn path_search_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut push_dir = |d: PathBuf| {
+        if !d.as_os_str().is_empty() && !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    };
+    if let Ok(path) = std::env::var("PATH") {
+        for d in std::env::split_paths(&path) {
+            push_dir(d);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        push_dir(home.join(".local/bin"));
+        // nvm：取字典序最大的 node 版本目录（绝大多数场景即最新版）
+        let nvm = home.join(".nvm/versions/node");
+        if let Ok(rd) = std::fs::read_dir(&nvm) {
+            let mut vers: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+            vers.sort();
+            if let Some(latest) = vers.pop() {
+                push_dir(latest.join("bin"));
+            }
+        }
+        push_dir(home.join(".cargo/bin"));
+        push_dir(home.join(".bun/bin"));
+        push_dir(home.join(".volta/bin"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        push_dir(PathBuf::from("/opt/homebrew/bin"));
+        push_dir(PathBuf::from("/usr/local/bin"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        push_dir(PathBuf::from("/usr/local/bin"));
+    }
+    dirs
+}
+
+/// 补全后的 PATH：spawn 子进程时用（`Command::env("PATH", extended_path())`），
+/// 让 `npx`/`uvx` 等脚本的 shebang（`env node`）也能解析到用户安装的解释器。
+pub fn extended_path() -> std::ffi::OsString {
+    std::env::join_paths(path_search_dirs())
+        .unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
+/// 在搜索目录里解析程序名 → 绝对路径；含路径分隔符或解析不到时原样返回（保持 spawn 报错可读）。
+pub fn resolve_program(prog: &str) -> String {
+    if prog.is_empty() || prog.contains('/') {
+        return prog.to_string();
+    }
+    for dir in path_search_dirs() {
+        let cand = dir.join(prog);
+        if cand.is_file() {
+            return cand.to_string_lossy().into_owned();
+        }
+    }
+    prog.to_string()
+}
 
 /// Bash 执行结果
 #[derive(Debug, Clone)]
@@ -39,6 +102,7 @@ pub async fn run_bash(
         .arg("-c")
         .arg(command)
         .current_dir(root)
+        .env("PATH", extended_path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
@@ -136,6 +200,30 @@ async fn audit_log(command: &str, result: &BashOutput, elapsed: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_program_finds_known_and_keeps_unknown() {
+        // bash 在 macOS/Linux 系统目录必然存在 → 解析为绝对路径
+        let r = resolve_program("bash");
+        assert!(r.starts_with('/') && r.ends_with("bash"), "应解析为绝对路径：{r}");
+        // 未知程序原样返回（spawn 报错仍可读）；含路径分隔符的不改写
+        assert_eq!(resolve_program("definitely-not-a-bin-xyz"), "definitely-not-a-bin-xyz");
+        assert_eq!(resolve_program("./rel/tool"), "./rel/tool");
+        assert_eq!(resolve_program(""), "");
+    }
+
+    #[test]
+    fn extended_path_contains_tool_dirs() {
+        let dirs = path_search_dirs();
+        assert!(!dirs.is_empty());
+        // 去重：无重复目录
+        let mut seen = dirs.clone();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(dirs.len(), seen.len(), "搜索目录不应重复");
+        // extended_path 可被 join_paths 消费（非空且含分隔符语义）
+        assert!(!extended_path().is_empty());
+    }
 
     #[tokio::test]
     async fn run_echo() {

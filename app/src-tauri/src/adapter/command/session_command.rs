@@ -6,9 +6,10 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::adapter::dto::{
-    CreateSessionRequest, DeleteSessionRequest, EditMessageRequest, GetSessionRequest,
-    ListSessionRequest, ProjectTokenUsageDTO, ProjectTokenUsageRequest, RenameSessionRequest,
-    RestoreSessionRequest, SessionDTO, SessionSummaryDTO, SetSessionModelRequest,
+    ClearSessionRequest, CreateSessionRequest, DeleteSessionRequest, EditMessageRequest,
+    GetSessionRequest, ListSessionRequest, ProjectTokenUsageDTO, ProjectTokenUsageRequest,
+    RenameSessionRequest, RestoreSessionRequest, SessionDTO, SessionSummaryDTO,
+    SetSessionModelRequest,
 };
 use crate::application::session_service::SessionService;
 use crate::error::ServiceError;
@@ -114,4 +115,13 @@ pub async fn rename_session(
     request: RenameSessionRequest,
 ) -> Result<(), ServiceError> {
     svc.rename_session(request.into()).await
+}
+
+/// 清空会话上下文（/clear）：硬删全部消息，统计归零；返回清除的消息数
+#[tauri::command]
+pub async fn clear_session(
+    svc: State<'_, Arc<dyn SessionService>>,
+    request: ClearSessionRequest,
+) -> Result<u64, ServiceError> {
+    svc.clear_session(request.into()).await
 }

@@ -10,6 +10,8 @@ import type {
 import * as sessionApi from '../services/session';
 import { errText, toast } from '../utils/feedback';
 import { useConfigStore } from './configStore';
+import { useProjectStore } from './projectStore';
+import { useAgentStore } from './agentStore';
 
 /** 消息节点本地 id 生成（仅前端渲染用，与后端消息 id 无关） */
 let nodeSeq = 0;
@@ -125,6 +127,9 @@ interface SessionState {
   deleteSession: (sessionId: number) => Promise<void>;
   /** 重命名会话标题（同步刷新 sessions 列表；otherSessions 缓存由调用方同步） */
   renameSession: (sessionId: number, title: string) => Promise<boolean>;
+  /** 清空会话上下文（/clear）：硬删全部消息，统计归零；返回清除的消息数 */
+  clearSession: (sessionId: number) => Promise<number | null>;
+  /** 清空会话上下文（/clear）：硬删全部消息，统计归零；返回清除的消息数 */
   /** 项目切换时清空会话上下文 */
   resetForProject: () => void;
 
@@ -250,6 +255,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (e) {
       toast.error(`重命名失败：${errText(e)}`);
       return false;
+    }
+  },
+
+  clearSession: async (sessionId) => {
+    try {
+      const removed = await sessionApi.clearSession(sessionId);
+      clearDeltaBuffer();
+      const { activeId } = get();
+      if (activeId === sessionId) {
+        set({ messages: [] });
+        // 重置当前会话的 token/ctx 显示
+        useAgentStore.getState().resetForSession();
+      }
+      await get().loadSessions(useProjectStore.getState().current?.path ?? '', get().searchKw || undefined);
+      return removed;
+    } catch (e) {
+      toast.error(`清空上下文失败：${errText(e)}`);
+      return null;
     }
   },
 

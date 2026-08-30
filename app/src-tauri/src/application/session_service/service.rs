@@ -6,6 +6,7 @@ use async_trait::async_trait;
 
 use crate::domain::config::ModelRepository;
 use crate::domain::project::ProjectRepository;
+use crate::domain::agent::CheckpointRepository;
 use crate::domain::session::{
     Message, MessageKind, MessageRepository, RecycleBinRepository, Session, SessionRepository,
 };
@@ -13,9 +14,9 @@ use crate::error::ServiceError;
 use crate::infra::db::now_local;
 
 use super::{
-    AppendMessageCmd, CreateSessionCmd, DeleteSessionCmd, EditMessageCmd, GetSessionQuery,
-    ListSessionQuery, MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, RenameSessionCmd,
-    RestoreSessionCmd, SessionBO, SessionSummaryBO, SetSessionModelCmd,
+    AppendMessageCmd, ClearSessionCmd, CreateSessionCmd, DeleteSessionCmd, EditMessageCmd,
+    GetSessionQuery, ListSessionQuery, MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery,
+    RenameSessionCmd, RestoreSessionCmd, SessionBO, SessionSummaryBO, SetSessionModelCmd,
 };
 
 /// 会话服务
@@ -48,6 +49,8 @@ pub trait SessionService: Send + Sync {
     async fn set_session_model(&self, cmd: SetSessionModelCmd) -> Result<(), ServiceError>;
     /// 重命名会话（trim 后 1..=80 字符；幂等：同值不写盘）
     async fn rename_session(&self, cmd: RenameSessionCmd) -> Result<(), ServiceError>;
+    /// 清空会话上下文（/clear）：硬删全部消息 + checkpoint，统计归零；空会话幂等
+    async fn clear_session(&self, cmd: ClearSessionCmd) -> Result<u64, ServiceError>;
 }
 
 /// 会话服务实现
@@ -57,6 +60,7 @@ pub struct SessionServiceImpl {
     project_repo: Arc<dyn ProjectRepository>,
     recycle_repo: Arc<dyn RecycleBinRepository>,
     model_repo: Arc<dyn ModelRepository>,
+    checkpoint_repo: Arc<dyn CheckpointRepository>,
 }
 
 impl SessionServiceImpl {
@@ -67,6 +71,7 @@ impl SessionServiceImpl {
         project_repo: Arc<dyn ProjectRepository>,
         recycle_repo: Arc<dyn RecycleBinRepository>,
         model_repo: Arc<dyn ModelRepository>,
+        checkpoint_repo: Arc<dyn CheckpointRepository>,
     ) -> Self {
         Self {
             session_repo,
@@ -74,6 +79,7 @@ impl SessionServiceImpl {
             project_repo,
             recycle_repo,
             model_repo,
+            checkpoint_repo,
         }
     }
 
@@ -250,6 +256,26 @@ impl SessionService for SessionServiceImpl {
         tracing::info!(session_id = session.id, title = %session.title, "会话已重命名");
         Ok(())
     }
+
+    async fn clear_session(&self, cmd: ClearSessionCmd) -> Result<u64, ServiceError> {
+        // 会话不存在 → not_found
+        self.session_repo
+            .find_by_id(cmd.session_id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found(format!("会话不存在：{}", cmd.session_id)))?;
+        // 物理删除全部消息与 checkpoint（含软删残留），/clear 语义：不可恢复
+        let removed = self
+            .message_repo
+            .hard_delete_by_session(cmd.session_id)
+            .await?;
+        self.checkpoint_repo
+            .hard_delete_by_session(cmd.session_id)
+            .await?;
+        // token/ctx 统计归零
+        self.session_repo.reset_usage(cmd.session_id).await?;
+        tracing::info!(session_id = cmd.session_id, removed, "会话上下文已清空");
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
@@ -268,6 +294,7 @@ mod tests {
             Arc::new(ProjectRepositoryImpl::new(pool.clone())),
             Arc::new(RecycleBinRepositoryImpl::new(pool.clone())),
             Arc::new(ModelRepositoryImpl::new(pool.clone())),
+            Arc::new(crate::infra::db::checkpoint_repo::CheckpointRepositoryImpl::new(pool.clone())),
         )
     }
 
@@ -439,6 +466,51 @@ mod tests {
                 session_id: 9999,
                 model: "kimi".into(),
             })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, 2002);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn clear_session_hard_deletes_messages_and_resets_usage(pool: SqlitePool) {
+        let svc = svc(&pool);
+        let (sid, _) = seed_session_with_messages(&pool).await;
+
+        // 模拟有 token 统计
+        sqlx::query(
+            "UPDATE cyan_session SET input_tokens = 1500, output_tokens = 700, ctx_percent = 65
+             WHERE id = ?",
+        )
+        .bind(sid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let removed = svc.clear_session(ClearSessionCmd { session_id: sid }).await.unwrap();
+        assert_eq!(removed, 4, "种子数据 4 条消息全部硬删");
+
+        // 消息物理消失（软删行也不存在）
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM cyan_message WHERE session_id = ?")
+            .bind(sid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(total.0, 0);
+
+        // 统计归零
+        let bo = svc.get_session(GetSessionQuery { session_id: sid }).await.unwrap();
+        assert!(bo.messages.is_empty());
+        assert_eq!(bo.input_tokens, 0);
+        assert_eq!(bo.output_tokens, 0);
+        assert_eq!(bo.ctx_percent, 0);
+
+        // 幂等：空会话再清返回 0
+        let removed = svc.clear_session(ClearSessionCmd { session_id: sid }).await.unwrap();
+        assert_eq!(removed, 0);
+
+        // 不存在的会话 → not_found
+        let err = svc
+            .clear_session(ClearSessionCmd { session_id: 9999 })
             .await
             .unwrap_err();
         assert_eq!(err.code, 2002);
