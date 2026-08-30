@@ -210,6 +210,8 @@ export interface PermRuleDTO {
   action: PermAction;
   /** 匹配顺序（自上而下） */
   sort: number;
+  /** 是否内置虚拟规则（只读展示，不可编辑删除；判定优先级最高） */
+  builtin?: boolean;
   /** 删除时间（回收站用；未删除为 null） */
   deletedAt?: string | null;
 }

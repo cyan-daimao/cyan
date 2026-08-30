@@ -264,7 +264,9 @@ impl ConfigService for ConfigServiceImpl {
 
     async fn list_global_rules(&self) -> Result<Vec<PermRuleBO>, ServiceError> {
         let rules = self.perm_repo.list_global().await?;
-        Ok(rules.into_iter().map(PermRuleBO::from).collect())
+        let mut out = Self::builtin_deny_rules();
+        out.extend(rules.into_iter().map(PermRuleBO::from));
+        Ok(out)
     }
 
     async fn list_visible_rules(
@@ -273,7 +275,9 @@ impl ConfigService for ConfigServiceImpl {
         project_id: i64,
     ) -> Result<Vec<PermRuleBO>, ServiceError> {
         let rules = self.perm_repo.list_visible(session_id, project_id).await?;
-        Ok(rules.into_iter().map(PermRuleBO::from).collect())
+        let mut out = Self::builtin_deny_rules();
+        out.extend(rules.into_iter().map(PermRuleBO::from));
+        Ok(out)
     }
 
     async fn save_perm_rule(&self, cmd: SavePermRuleCmd) -> Result<PermRuleBO, ServiceError> {
@@ -353,6 +357,39 @@ impl ConfigService for ConfigServiceImpl {
     }
 }
 
+impl ConfigServiceImpl {
+    /// 内置 deny 虚拟规则（只读展示）：来自 PermissionEngine 内置清单，负数 id、
+    /// 不落库、不可编辑删除。判定优先级高于一切用户规则（见 domain/agent/permission.rs）。
+    fn builtin_deny_rules() -> Vec<PermRuleBO> {
+        let mut next_id = -1i64;
+        let mut push = |out: &mut Vec<PermRuleBO>, tool: &str, pattern: &str| {
+            out.push(PermRuleBO {
+                id: next_id,
+                scope: "global".into(),
+                project_id: None,
+                session_id: None,
+                tool: tool.into(),
+                pattern: pattern.into(),
+                action: "deny".into(),
+                sort: 0,
+                builtin: true,
+                deleted_at: None,
+            });
+            next_id -= 1;
+        };
+        let mut out = Vec::new();
+        // 敏感文件：basename glob（对所有工具生效）
+        for g in crate::domain::agent::permission::PermissionEngine::builtin_deny_file_globs() {
+            push(&mut out, "*", g);
+        }
+        // 危险命令片段：仅 Bash，命令串归一化后包含匹配
+        for f in crate::domain::agent::permission::PermissionEngine::builtin_deny_cmd_fragments() {
+            push(&mut out, "Bash", f);
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +458,43 @@ mod tests {
         assert!(items.iter().all(|i| i.source == "featured"));
         assert!(items.iter().all(|i| i.command.is_some()));
         assert!(items.iter().any(|i| i.name == "context7"));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_rules_injects_builtin_deny_virtual_rules(pool: SqlitePool) {
+        let s = svc(&pool);
+        // 全局与可见列表都注入内置 deny 虚拟规则（负数 id、builtin=true、deny）
+        for listed in [
+            s.list_global_rules().await.unwrap(),
+            s.list_visible_rules(1, 1).await.unwrap(),
+        ] {
+            let builtins: Vec<_> = listed.iter().filter(|r| r.builtin).collect();
+            assert_eq!(builtins.len(), 9, "内置 deny = 4 敏感文件 glob + 5 危险命令片段");
+            assert!(builtins.iter().all(|r| r.id < 0 && r.action == "deny"));
+            assert!(builtins.iter().all(|r| r.deleted_at.is_none()));
+            // 敏感文件 glob 对所有工具生效，危险命令仅 Bash
+            assert_eq!(builtins.iter().filter(|r| r.tool == "*").count(), 4);
+            assert_eq!(builtins.iter().filter(|r| r.tool == "Bash").count(), 5);
+            assert!(builtins.iter().any(|r| r.pattern == ".env"));
+            assert!(builtins.iter().any(|r| r.pattern == "rm -rf /"));
+        }
+        // 用户规则追加在内置之后，不受影响
+        let saved = s
+            .save_perm_rule(SavePermRuleCmd {
+                id: None,
+                scope: "global".into(),
+                project_id: None,
+                session_id: None,
+                tool: "Bash".into(),
+                pattern: "cargo *".into(),
+                action: "allow".into(),
+                sort: 1,
+            })
+            .await
+            .unwrap();
+        let listed = s.list_global_rules().await.unwrap();
+        assert_eq!(listed.len(), 10);
+        assert!(!listed.last().unwrap().builtin);
+        assert_eq!(listed.last().unwrap().id, saved.id);
     }
 }

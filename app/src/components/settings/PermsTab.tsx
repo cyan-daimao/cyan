@@ -34,7 +34,12 @@ export function PermsTab() {
       title: '工具',
       dataIndex: 'tool',
       width: 110,
-      render: (v: string) => <Tag className="mono">{v}</Tag>,
+      render: (v: string, r) => (
+        <span>
+          <Tag className="mono">{v}</Tag>
+          {r.builtin && <Tag color="default">内置</Tag>}
+        </span>
+      ),
     },
     {
       title: '匹配模式',
@@ -51,48 +56,51 @@ export function PermsTab() {
       title: '操作',
       key: 'ops',
       width: 130,
-      render: (_, r) => (
-        <span>
-          <Button
-            type="link"
-            size="small"
-            onClick={() => {
-              setEditing(r);
-              setFormOpen(true);
-            }}
-          >
-            编辑
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            danger
-            onClick={() =>
-              confirmDanger({
-                title: '删除全局规则',
-                content: (
-                  <span>
-                    删除全局规则{' '}
-                    <b className="mono">
-                      {r.tool} {r.pattern}
-                    </b>{' '}
-                    后，所有项目匹配的操作将回退到「询问」。
-                  </span>
-                ),
-                okText: '删除',
-                onOk: async () => {
-                  if (await deletePermRule(r.id)) {
-                    toast.success('规则已删除');
-                    void loadGlobalRules();
-                  }
-                },
-              })
-            }
-          >
-            删除
-          </Button>
-        </span>
-      ),
+      render: (_, r) =>
+        r.builtin ? (
+          <span style={{ color: 'var(--text-3)', fontSize: 12 }}>内置不可改</span>
+        ) : (
+          <span>
+            <Button
+              type="link"
+              size="small"
+              onClick={() => {
+                setEditing(r);
+                setFormOpen(true);
+              }}
+            >
+              编辑
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              danger
+              onClick={() =>
+                confirmDanger({
+                  title: '删除全局规则',
+                  content: (
+                    <span>
+                      删除全局规则{' '}
+                      <b className="mono">
+                        {r.tool} {r.pattern}
+                      </b>{' '}
+                      后，所有项目匹配的操作将回退到「询问」。
+                    </span>
+                  ),
+                  okText: '删除',
+                  onOk: async () => {
+                    if (await deletePermRule(r.id)) {
+                      toast.success('规则已删除');
+                      void loadGlobalRules();
+                    }
+                  },
+                })
+              }
+            >
+              删除
+            </Button>
+          </span>
+        ),
     },
   ];
 

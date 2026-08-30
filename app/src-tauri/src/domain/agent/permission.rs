@@ -94,6 +94,16 @@ impl PermissionEngine {
     const BUILTIN_DENY_CMD: &'static [&'static str] =
         &["rm -rf /", "rm -fr /", "rm -rf ~", "mkfs.", ":(){:|:&};:"];
 
+    /// 内置 deny 敏感文件 glob 清单（配置层只读展示用；匹配语义见 matches_builtin_deny）
+    pub fn builtin_deny_file_globs() -> &'static [&'static str] {
+        Self::BUILTIN_DENY
+    }
+
+    /// 内置 deny 危险命令片段清单（仅对 Bash 目标做归一化包含匹配；展示用）
+    pub fn builtin_deny_cmd_fragments() -> &'static [&'static str] {
+        Self::BUILTIN_DENY_CMD
+    }
+
     /// 构造（rules 需已按 sort 升序）
     pub fn new(mut rules: Vec<PermissionRule>, mode: PermMode) -> Self {
         rules.sort_by_key(|r| r.sort);

@@ -127,6 +127,8 @@ pub struct PermRuleBO {
     pub action: String,
     /// 匹配顺序
     pub sort: i64,
+    /// 是否内置虚拟规则（只读展示，不落库、不可编辑删除）
+    pub builtin: bool,
     /// 软删时间（未删除为 None）
     pub deleted_at: Option<chrono::NaiveDateTime>,
 }
@@ -142,6 +144,7 @@ impl From<PermissionRule> for PermRuleBO {
             pattern: r.pattern,
             action: r.action.as_str().to_string(),
             sort: r.sort,
+            builtin: false,
             deleted_at: r.deleted_at,
         }
     }

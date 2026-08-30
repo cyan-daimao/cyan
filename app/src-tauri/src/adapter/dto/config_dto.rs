@@ -330,6 +330,8 @@ pub struct PermRuleDTO {
     pub action: String,
     /// 匹配顺序
     pub sort: i64,
+    /// 是否内置虚拟规则（只读，不可编辑删除）
+    pub builtin: bool,
     /// 删除时间（未删除为 null）
     pub deleted_at: Option<String>,
 }
@@ -345,6 +347,7 @@ impl From<PermRuleBO> for PermRuleDTO {
             pattern: bo.pattern,
             action: bo.action,
             sort: bo.sort,
+            builtin: bo.builtin,
             deleted_at: bo.deleted_at.as_ref().map(fmt_time),
         }
     }
