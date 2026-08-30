@@ -255,19 +255,20 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
               { label: '自动', value: 'auto' },
             ]}
           />
-          <button
-            className="icon-btn"
-            title="当前会话的权限规则"
-            onClick={() => {
-              if (activeId === null) {
-                toast.warning('请先开始一个对话');
-                return;
-              }
-              setPermsOpen(true);
-            }}
-          >
-            <SafetyOutlined /> 规则
-          </button>
+          <Tooltip title="当前会话的权限规则">
+            <button
+              className="icon-btn"
+              onClick={() => {
+                if (activeId === null) {
+                  toast.warning('请先开始一个对话');
+                  return;
+                }
+                setPermsOpen(true);
+              }}
+            >
+              <SafetyOutlined />
+            </button>
+          </Tooltip>
           <Tooltip title="清空上下文（/clear）">
             <button
               className="icon-btn"
