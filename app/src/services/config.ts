@@ -28,9 +28,14 @@ export const setDefaultModel = (id: number) =>
 
 export const listMcpServers = () => call<McpServerDTO[]>('list_mcp_servers');
 
-/** 保存（含握手验证）；id 编辑时携带，新增传 undefined */
-export const saveMcpServer = (id: number | undefined, name: string, command: string) =>
-  call<McpServerDTO>('save_mcp_server', { request: { id, name, command } });
+/** 保存（含握手验证）；id 编辑时携带，新增传 undefined；sse 需传服务 URL 与请求头（JSON 对象文本） */
+export const saveMcpServer = (
+  id: number | undefined,
+  name: string,
+  command: string,
+  transport: 'stdio' | 'sse' = 'stdio',
+  headers = '{}',
+) => call<McpServerDTO>('save_mcp_server', { request: { id, name, command, transport, headers } });
 
 export const toggleMcpServer = (id: number, enable: boolean) =>
   call<McpServerDTO>('toggle_mcp_server', { request: { id, enable } });

@@ -12,7 +12,7 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::domain::config::McpServer;
+use crate::domain::config::{McpServer, McpTransport};
 
 /// MCP 工具名前缀：`mcp__<server>__<tool>`
 pub const MCP_TOOL_PREFIX: &str = "mcp__";
@@ -78,12 +78,15 @@ pub trait McpClient: Send + Sync {
     async fn call_tool(&self, tool: &str, args: Value) -> Result<String, McpError>;
 }
 
-/// 按 command 前缀选择传输并完成握手：`http(s)://` → SSE，否则 → stdio 子进程
-pub async fn connect(command: &str) -> Result<Box<dyn McpClient>, McpError> {
-    if command.starts_with("http://") || command.starts_with("https://") {
-        Ok(Box::new(sse::SseClient::connect(command).await?))
-    } else {
-        Ok(Box::new(stdio::StdioClient::connect(command).await?))
+/// 按 transport 选择传输并完成握手：stdio → 子进程，sse → SSE HTTP 长连接
+pub async fn connect(
+    transport: McpTransport,
+    command: &str,
+    headers: &HashMap<String, String>,
+) -> Result<Box<dyn McpClient>, McpError> {
+    match transport {
+        McpTransport::Sse => Ok(Box::new(sse::SseClient::connect(command, headers).await?)),
+        McpTransport::Stdio => Ok(Box::new(stdio::StdioClient::connect(command).await?)),
     }
 }
 
@@ -95,7 +98,13 @@ pub trait McpGateway: Send + Sync {
     /// 路由 tools/call 到对应连接（输出截断 50KB）
     async fn call_tool(&self, server: &str, tool: &str, args: Value) -> Result<String, McpError>;
     /// 握手并注册连接，返回发现的工具数
-    async fn connect(&self, server_name: &str, command: &str) -> Result<usize, McpError>;
+    async fn connect(
+        &self,
+        server_name: &str,
+        transport: McpTransport,
+        command: &str,
+        headers: &HashMap<String, String>,
+    ) -> Result<usize, McpError>;
     /// 断开并清理连接（幂等）
     async fn disconnect(&self, server_name: &str);
 }
@@ -143,10 +152,16 @@ impl McpGateway for McpPool {
         Ok(truncate_output(&out, MAX_TOOL_OUTPUT))
     }
 
-    async fn connect(&self, server_name: &str, command: &str) -> Result<usize, McpError> {
+    async fn connect(
+        &self,
+        server_name: &str,
+        transport: McpTransport,
+        command: &str,
+        headers: &HashMap<String, String>,
+    ) -> Result<usize, McpError> {
         // 同名已有连接先清理（重连刷新工具列表）
         self.disconnect(server_name).await;
-        let client = connect(command).await?;
+        let client = connect(transport, command, headers).await?;
         let n = client.tools().len();
         self.clients
             .write()
@@ -192,7 +207,14 @@ pub async fn handshake(
         server.mark_error("启动命令为空".into());
         return Err(McpError::Spawn("启动命令为空".into()));
     }
-    match gateway.connect(&server.name, &server.command).await {
+    if let Err(e) = server.validate() {
+        server.mark_error(e.to_string());
+        return Err(McpError::Protocol(e.to_string()));
+    }
+    match gateway
+        .connect(&server.name, server.transport, &server.command, &server.headers_map())
+        .await
+    {
         Ok(n) => {
             server
                 .mark_connected(n as i64)

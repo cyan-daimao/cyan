@@ -98,7 +98,13 @@ interface ConfigState {
 
   /* ---- MCP ---- */
   loadMcpServers: () => Promise<void>;
-  saveMcpServer: (id: number | undefined, name: string, command: string) => Promise<boolean>;
+  saveMcpServer: (
+    id: number | undefined,
+    name: string,
+    command: string,
+    transport?: 'stdio' | 'sse',
+    headers?: string,
+  ) => Promise<boolean>;
   toggleMcp: (id: number, enable: boolean) => Promise<boolean>;
   deleteMcp: (id: number) => Promise<boolean>;
 
@@ -261,9 +267,9 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     }
   },
 
-  saveMcpServer: async (id, name, command) => {
+  saveMcpServer: async (id, name, command, transport = 'stdio', headers = '{}') => {
     try {
-      await configApi.saveMcpServer(id, name, command);
+      await configApi.saveMcpServer(id, name, command, transport, headers);
       await get().loadMcpServers();
       return true;
     } catch (e) {

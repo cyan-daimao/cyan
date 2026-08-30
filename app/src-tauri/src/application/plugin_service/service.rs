@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::domain::config::{
-    McpRepository, McpServer, PermAction, PermRuleRepository, PermissionRule,
+    McpRepository, McpServer, McpTransport, PermAction, PermRuleRepository, PermissionRule,
 };
 use crate::domain::plugin::{Plugin, PluginRepository, SidecarGateway};
 use crate::error::ServiceError;
@@ -84,6 +84,11 @@ impl PluginServiceImpl {
     ) -> Result<(), ServiceError> {
         match self.mcp_repo.find_by_name(name).await? {
             Some(mut s) if s.plugin_origin.as_deref() == Some(origin) => {
+                s.transport = if McpTransport::is_remote_url(command) {
+                    McpTransport::Sse
+                } else {
+                    McpTransport::Stdio
+                };
                 s.command = command.to_string();
                 self.mcp_repo.update(&s).await?;
             }
@@ -93,7 +98,13 @@ impl PluginServiceImpl {
                 )));
             }
             None => {
-                let mut s = McpServer::new(name.to_string(), command.to_string(), now_local());
+                // sidecar URL / 声明命令：按前缀自动判定传输方式
+                let transport = if McpTransport::is_remote_url(command) {
+                    McpTransport::Sse
+                } else {
+                    McpTransport::Stdio
+                };
+                let mut s = McpServer::with_transport(name.to_string(), transport, command.to_string(), now_local());
                 s.plugin_origin = Some(origin.to_string());
                 self.mcp_repo.insert(&mut s).await?;
             }

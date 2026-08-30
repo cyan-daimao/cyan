@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use sqlx::{FromRow, SqlitePool};
 
-use crate::domain::config::{McpRepository, McpServer, McpStatus};
+use crate::domain::config::{McpRepository, McpServer, McpStatus, McpTransport};
 
 use super::{fmt_time, now_local, parse_time, parse_time_opt};
 
@@ -14,8 +14,12 @@ pub struct McpServerDO {
     pub id: i64,
     /// 服务器名（唯一）
     pub name: String,
-    /// 启动命令
+    /// 传输方式（stdio/sse）
+    pub transport: String,
+    /// 启动命令（stdio）或服务 URL（sse）
     pub command: String,
+    /// 远程服务请求头（JSON 对象文本）
+    pub headers: String,
     /// 状态（connected/error/disabled）
     pub status: String,
     /// 握手发现的工具数
@@ -43,7 +47,9 @@ impl TryFrom<McpServerDO> for McpServer {
         Ok(Self {
             id: d.id,
             name: d.name,
+            transport: McpTransport::parse(&d.transport),
             command: d.command,
+            headers: d.headers,
             status: McpStatus::parse(&d.status),
             tools: d.tools,
             last_error: d.last_error,
@@ -56,7 +62,7 @@ impl TryFrom<McpServerDO> for McpServer {
 }
 
 const SELECT_COLS: &str =
-    "id, name, command, status, tools, last_error, plugin_origin, created_by, updated_by, created_at, updated_at, deleted_at";
+    "id, name, transport, command, headers, status, tools, last_error, plugin_origin, created_by, updated_by, created_at, updated_at, deleted_at";
 
 /// MCP 服务器仓储 SQLx 实现
 pub struct McpRepositoryImpl {
@@ -97,11 +103,13 @@ impl McpRepository for McpRepositoryImpl {
         server.updated_at = now;
         let id = sqlx::query(
             "INSERT INTO cyan_mcp_server
-                (name, command, status, tools, last_error, plugin_origin, created_by, updated_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, 'local', 'local', ?, ?)",
+                (name, transport, command, headers, status, tools, last_error, plugin_origin, created_by, updated_by, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'local', 'local', ?, ?)",
         )
         .bind(&server.name)
+        .bind(server.transport.as_str())
         .bind(&server.command)
+        .bind(&server.headers)
         .bind(server.status.as_str())
         .bind(server.tools)
         .bind(&server.last_error)
@@ -118,11 +126,13 @@ impl McpRepository for McpRepositoryImpl {
     async fn update(&self, server: &McpServer) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE cyan_mcp_server
-             SET command = ?, status = ?, tools = ?, last_error = ?,
+             SET transport = ?, command = ?, headers = ?, status = ?, tools = ?, last_error = ?,
                  updated_by = 'local', updated_at = ?
              WHERE id = ? AND deleted_at IS NULL",
         )
+        .bind(server.transport.as_str())
         .bind(&server.command)
+        .bind(&server.headers)
         .bind(server.status.as_str())
         .bind(server.tools)
         .bind(&server.last_error)

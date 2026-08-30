@@ -49,8 +49,12 @@ pub struct McpServerBO {
     pub id: i64,
     /// 服务器名
     pub name: String,
-    /// 启动命令
+    /// 传输方式（stdio/sse）
+    pub transport: String,
+    /// stdio：启动命令；sse：服务 URL
     pub command: String,
+    /// 远程服务请求头（JSON 对象文本）
+    pub headers: String,
     /// 状态（connected/error/disabled）
     pub status: String,
     /// 发现的工具数
@@ -66,7 +70,9 @@ impl From<McpServer> for McpServerBO {
         Self {
             id: s.id,
             name: s.name,
+            transport: s.transport.as_str().to_string(),
             command: s.command,
+            headers: s.headers,
             status: s.status.as_str().to_string(),
             tools: s.tools,
             last_error: s.last_error,

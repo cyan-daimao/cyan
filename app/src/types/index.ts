@@ -26,6 +26,8 @@ export type TodoState = 'pending' | 'in_progress' | 'done';
 export type ModelStatus = 'enabled' | 'disabled';
 /** MCP 服务器状态 */
 export type McpStatus = 'connected' | 'error' | 'disabled';
+/** MCP 传输方式：stdio 本地子进程 / sse 远程服务 */
+export type McpTransport = 'stdio' | 'sse';
 /** 权限规则动作 */
 export type PermAction = 'allow' | 'ask' | 'deny';
 /** 项目脚手架模板（domain project.rs：empty / rust / node） */
@@ -184,7 +186,12 @@ export interface SaveModelRequest {
 export interface McpServerDTO {
   id: number;
   name: string;
+  /** 传输方式（stdio/sse） */
+  transport: McpTransport;
+  /** stdio：启动命令；sse：服务 URL */
   command: string;
+  /** 远程服务请求头（JSON 对象文本；stdio 为空对象） */
+  headers: string;
   status: McpStatus;
   /** 握手发现的工具数；非 connected 前端展示 — */
   tools: number;

@@ -2,6 +2,7 @@
 //! GET <url> 长连接收事件流；`endpoint` 事件给出 POST 地址；
 //! JSON-RPC 经 POST 发出，响应经 SSE `message` 事件按 id 返回。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -66,21 +67,28 @@ impl SseParser {
 pub(crate) struct SseClient {
     http: reqwest::Client,
     post_url: String,
+    /// 连接时的自定义请求头（POST 与 GET 同源鉴权）
+    headers: HashMap<String, String>,
     dispatcher: Arc<Dispatcher>,
     tools: Vec<McpTool>,
     reader_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl SseClient {
-    /// 建立 SSE 长连接，等 endpoint 事件，完成 initialize → notifications/initialized → tools/list
-    pub async fn connect(url: &str) -> Result<Self, McpError> {
+    /// 建立 SSE 长连接（可带自定义请求头，如 Authorization），等 endpoint 事件，
+    /// 完成 initialize → notifications/initialized → tools/list
+    pub async fn connect(url: &str, headers: &HashMap<String, String>) -> Result<Self, McpError> {
         let http = reqwest::Client::builder()
             .user_agent("cyan-app")
             .build()
             .map_err(|e| McpError::Http(format!("HTTP client 构建失败：{e}")))?;
-        let resp = http
+        let mut req = http
             .get(url)
-            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .header(reqwest::header::ACCEPT, "text/event-stream");
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| McpError::Http(format!("SSE 连接失败：{e}")))?;
@@ -134,6 +142,7 @@ impl SseClient {
         let mut client = Self {
             http,
             post_url,
+            headers: headers.clone(),
             dispatcher,
             tools: Vec::new(),
             reader_task: Mutex::new(Some(reader_task)),
@@ -156,15 +165,20 @@ impl SseClient {
         Ok(())
     }
 
-    /// POST 一帧 JSON-RPC
+    /// POST 一帧 JSON-RPC（携带连接时的自定义请求头）
     async fn post(&self, body: Value) -> Result<(), McpError> {
-        let resp = self
+        let mut req = self
             .http
             .post(&self.post_url)
             .header(
                 reqwest::header::ACCEPT,
                 "application/json, text/event-stream",
-            )
+            );
+        // 存下连接时的鉴权头：POST 与 GET 同源需要（SSE 服务端按头鉴权）
+        for (k, v) in &self.headers {
+            req = req.header(k, v);
+        }
+        let resp = req
             .json(&body)
             .send()
             .await

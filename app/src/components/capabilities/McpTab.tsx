@@ -40,11 +40,12 @@ export function McpTab() {
       render: (v: string) => <b>{v}</b>,
     },
     {
-      title: '启动命令',
+      title: '命令 / 服务地址',
       dataIndex: 'command',
       ellipsis: true,
-      render: (v: string) => (
+      render: (v: string, s) => (
         <span className="mono" title={v}>
+          {s.transport === 'sse' ? <Tag color="blue">SSE</Tag> : null}
           {v}
         </span>
       ),

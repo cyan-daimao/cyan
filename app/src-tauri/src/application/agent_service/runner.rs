@@ -1209,7 +1209,13 @@ mod tests {
                 Ok("pong".into())
             }
         }
-        async fn connect(&self, _server: &str, _command: &str) -> Result<usize, McpError> {
+        async fn connect(
+            &self,
+            _server: &str,
+            _transport: crate::domain::config::McpTransport,
+            _command: &str,
+            _headers: &std::collections::HashMap<String, String>,
+        ) -> Result<usize, McpError> {
             Ok(0)
         }
         async fn disconnect(&self, _server: &str) {}

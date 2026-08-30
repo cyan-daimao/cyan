@@ -40,8 +40,12 @@ pub struct SaveMcpCmd {
     pub id: Option<i64>,
     /// 服务器名（唯一）
     pub name: String,
-    /// 启动命令
+    /// 传输方式（stdio/sse）
+    pub transport: String,
+    /// stdio：启动命令；sse：服务 URL
     pub command: String,
+    /// 远程服务请求头（JSON 对象文本；stdio 忽略）
+    pub headers: String,
 }
 
 /// 启停 MCP 服务器命令

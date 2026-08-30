@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::domain::config::{
-    McpRepository, McpServer, ModelConfig, ModelRepository, ModelStatus, PermAction,
+    McpRepository, McpServer, McpTransport, ModelConfig, ModelRepository, ModelStatus, PermAction,
     PermRuleRepository, PermissionRule, RuleScope,
 };
 use crate::error::ServiceError;
@@ -188,13 +188,20 @@ impl ConfigService for ConfigServiceImpl {
 
     async fn save_mcp_server(&self, cmd: SaveMcpCmd) -> Result<McpServerBO, ServiceError> {
         let now = now_local();
+        let transport = McpTransport::parse(cmd.transport.trim());
         let mut server = match self.mcp_repo.find_by_name(&cmd.name).await? {
             Some(mut existing) => {
+                existing.transport = transport;
                 existing.command = cmd.command.clone();
+                existing.headers = cmd.headers.clone();
                 existing.updated_at = now;
                 existing
             }
-            None => McpServer::new(cmd.name.clone(), cmd.command.clone(), now),
+            None => {
+                let mut s = McpServer::with_transport(cmd.name.clone(), transport, cmd.command.clone(), now);
+                s.headers = cmd.headers.clone();
+                s
+            }
         };
         server.validate()?;
         if server.id == 0 {
@@ -414,7 +421,9 @@ mod tests {
             .save_mcp_server(SaveMcpCmd {
                 id: None,
                 name: "bad".into(),
+                transport: "stdio".into(),
                 command: "definitely-not-a-real-binary-xyz123".into(),
+                headers: "{}".into(),
             })
             .await
             .unwrap();

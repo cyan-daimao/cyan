@@ -110,7 +110,7 @@ impl From<ModelBO> for ModelDTO {
     }
 }
 
-/// save_mcp_server 请求（安装市场条目复用此结构，字段不得变更）
+/// save_mcp_server 请求（安装市场条目复用此结构，字段向后兼容新增）
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveMcpRequest {
@@ -118,8 +118,18 @@ pub struct SaveMcpRequest {
     pub id: Option<i64>,
     /// 服务器名
     pub name: String,
-    /// 启动命令
+    /// 传输方式（stdio/sse；缺省 stdio，向后兼容旧前端调用）
+    #[serde(default = "default_mcp_transport")]
+    pub transport: String,
+    /// 启动命令（stdio）或服务 URL（sse）
     pub command: String,
+    /// 远程服务请求头（JSON 对象文本；缺省空对象，向后兼容）
+    #[serde(default)]
+    pub headers: String,
+}
+
+fn default_mcp_transport() -> String {
+    "stdio".to_string()
 }
 
 impl From<SaveMcpRequest> for SaveMcpCmd {
@@ -127,7 +137,9 @@ impl From<SaveMcpRequest> for SaveMcpCmd {
         Self {
             id: r.id,
             name: r.name,
+            transport: r.transport,
             command: r.command,
+            headers: r.headers,
         }
     }
 }
@@ -173,8 +185,12 @@ pub struct McpServerDTO {
     pub id: i64,
     /// 服务器名
     pub name: String,
-    /// 启动命令
+    /// 传输方式（stdio/sse）
+    pub transport: String,
+    /// 启动命令（stdio）或服务 URL（sse）
     pub command: String,
+    /// 远程服务请求头（JSON 对象文本）
+    pub headers: String,
     /// 状态
     pub status: String,
     /// 工具数
@@ -190,7 +206,9 @@ impl From<McpServerBO> for McpServerDTO {
         Self {
             id: bo.id,
             name: bo.name,
+            transport: bo.transport,
             command: bo.command,
+            headers: bo.headers,
             status: bo.status,
             tools: bo.tools,
             last_error: bo.last_error,
