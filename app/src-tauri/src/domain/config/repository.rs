@@ -42,7 +42,8 @@ pub trait McpRepository: Send + Sync {
     async fn update(&self, server: &McpServer) -> anyhow::Result<()>;
     /// 软删除
     async fn soft_delete(&self, id: i64) -> anyhow::Result<()>;
-    /// 回收站：软删 MCP 服务器列表（deleted_at 非空）
+    /// 物理删除同名软删行（重装自愈：软删行仍占用 name UNIQUE 约束，导致重装 INSERT 报 2067）
+    async fn hard_delete_by_name(&self, name: &str) -> anyhow::Result<()>;
     async fn list_deleted(&self) -> anyhow::Result<Vec<McpServer>>;
     /// 恢复软删 MCP 服务器（清 deleted_at，幂等）
     async fn restore(&self, id: i64) -> anyhow::Result<()>;

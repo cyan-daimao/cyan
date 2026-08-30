@@ -133,7 +133,7 @@ pub fn run() {
             ));
             let skill_service: Arc<dyn SkillService> = Arc::new(SkillServiceImpl::new(
                 plugin_repo.clone(),
-                plugins_dir,
+                plugins_dir.clone(),
                 infra::db::datasource::cyan_home()
                     .map(|h| h.join("skills"))
                     .unwrap_or_else(|_| std::path::PathBuf::from(".cyan/skills")),
@@ -145,7 +145,7 @@ pub fn run() {
                 checkpoint_repo.clone(),
                 model_repo.clone(),
                 mcp_repo.clone(),
-                plugin_repo,
+                plugin_repo.clone(),
                 perm_repo.clone(),
             ));
             let agent_service: Arc<dyn AgentService> = Arc::new(AgentServiceImpl::new(
@@ -160,6 +160,13 @@ pub fn run() {
                 checkpoint_gateway,
                 sink,
                 mcp_gateway,
+                Some(plugin_repo),
+                Some(plugins_dir),
+                Some(
+                    infra::db::datasource::cyan_home()
+                        .map(|h| h.join("skills"))
+                        .unwrap_or_else(|_| std::path::PathBuf::from(".cyan/skills")),
+                ),
             ));
 
             app.manage(session_service);

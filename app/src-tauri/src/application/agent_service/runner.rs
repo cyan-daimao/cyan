@@ -13,9 +13,12 @@ use crate::domain::agent::{
     ToolOutput, ToolOutputStatus, ToolSpec,
 };
 use crate::domain::config::{ModelConfig, PermAction, PermRuleRepository, PermissionRule};
+use crate::domain::plugin::{PluginRepository, PluginStatus};
 use crate::domain::session::{Message, MessageKind, MessageRepository, Session, SessionRepository, COMPACT_THRESHOLD};
 use crate::domain::shared::ProjectPath;
+use crate::domain::skill::{Skill, SkillSource};
 use crate::infra::db::now_local;
+use crate::infra::fs::skill as skill_fs;
 use crate::infra::mcp::{self, McpGateway};
 
 /// 续跑窗口大小（每 25 轮注入一次续跑提醒；无总轮次上限，cancel 与 ctx≥90% 自动压缩是仅有的安全阀）
@@ -33,17 +36,29 @@ fn continuation_note(max_iters: usize, round: i64) -> String {
     format!("⏳ 已执行 {max_iters} 轮工具调用，任务未完成，自动继续执行（第 {round} 次续跑）")
 }
 
-/// 连续重复调用中止阈值（同一调用连续 6 次）
-const DUP_ABORT_AFTER: usize = 6;
+/// 连续重复调用中止阈值（同一调用连续 20 次；仅参数完全相同才计数，穿插不同调用即重置）
+const DUP_ABORT_AFTER: usize = 20;
 
-/// 重复调用拦截文案（不再真正执行，结果与上文相同；纯函数便于测试）
+/// 连续重复达到该计数后，拦截升级为强提醒（给出可操作引导，给模型缓冲带）
+const DUP_WARN_AFTER: usize = 10;
+
+/// 重复调用拦截文案（不执行，结果与上文相同；纯函数便于测试）
 fn dup_intercept_text() -> &'static str {
-    "⚠️ 重复调用已拦截：该工具以相同参数刚执行过，结果与上文相同，请基于已有结果继续；如需不同结果请调整参数。"
+    "⚠️ 重复调用已拦截：该工具以相同参数刚执行过，结果与上文相同。请直接基于已有结果继续；如需不同结果请调整参数。"
+}
+
+/// 临近阈值的强提醒（含具体引导，给模型明确出路而非只报错）
+fn dup_warn_text(times: usize) -> String {
+    format!(
+        "🚨 警告：已连续 {times} 次以完全相同参数调用同一工具，再重复将被强制中止。请立即改为：① 调整参数换一种调用方式；② 换用其他工具达成目标；③ 若上文结果已够用，直接基于它继续任务。"
+    )
 }
 
 /// 循环中止系统提示（纯函数便于测试）
 fn dup_abort_note(times: usize) -> String {
-    format!("🛑 检测到重复工具调用循环（同一调用连续 {times} 次），已自动中止。建议更换更强的模型或调整任务描述后重试。")
+    format!(
+        "🛑 检测到重复工具调用循环（同一调用连续 {times} 次完全相同），已自动中止。已完成的部分结果仍保留在会话中；可调整任务描述或更换模型后重新发起。"
+    )
 }
 
 /// 重复调用判定
@@ -53,6 +68,8 @@ enum DupVerdict {
     Proceed,
     /// 拦截（不执行，回写拦截说明）
     Intercept,
+    /// 临近阈值的强提醒（不执行，回写可操作引导）
+    Warn,
     /// 中止运行（循环检测）
     Abort,
 }
@@ -60,28 +77,58 @@ enum DupVerdict {
 /// 重复工具调用护栏：追踪最近一次调用签名与连续重复次数（内置工具与 mcp__ 统一生效）
 #[derive(Default)]
 struct DupCallGuard {
-    /// 最近一次执行的调用签名（tool, arg）
+    /// 最近一次执行的调用签名（tool, 完整参数序列化）
     last_sig: Option<(String, String)>,
     /// 连续重复次数（首次为 0）
     dup_count: usize,
+    /// 最近一次 check 的连续重复次数（含当次；Warn 文案取值用）
+    streak: usize,
+    /// 同一签名连续执行失败次数（失败后允许原样重试一次，应对网络抖动等瞬时错误）
+    fail_streak: usize,
 }
 
 impl DupCallGuard {
-    /// 判定一次调用：签名与上次相同 → 重复计数 +1；不同 → 清零并更新签名
-    fn check(&mut self, tool: &str, arg: &str) -> DupVerdict {
-        let sig = (tool.to_string(), arg.to_string());
+    /// 判定一次调用：签名与上次相同 → 重复计数 +1；不同 → 清零并更新签名。
+    /// 上次同签名执行失败（fail_streak == 1）→ 视为合法重试，计数清零。
+    /// 判定阶梯：首次放行 → 第 2~{DUP_WARN_AFTER} 次拦截 → 临近阈值强提醒 → 达阈值中止。
+    fn check(&mut self, tool: &str, input: &Value) -> DupVerdict {
+        let sig = (tool.to_string(), input.to_string());
         if self.last_sig.as_ref() == Some(&sig) {
-            self.dup_count += 1;
+            self.streak += 1;
+            if self.fail_streak == 1 {
+                self.dup_count = 0;
+            } else {
+                self.dup_count += 1;
+            }
         } else {
             self.last_sig = Some(sig);
+            self.streak = 1;
             self.dup_count = 0;
+            self.fail_streak = 0;
         }
         if self.dup_count >= DUP_ABORT_AFTER - 1 {
             DupVerdict::Abort
+        } else if self.dup_count >= DUP_WARN_AFTER {
+            DupVerdict::Warn
         } else if self.dup_count >= 1 {
             DupVerdict::Intercept
         } else {
             DupVerdict::Proceed
+        }
+    }
+
+    /// 最近一次 check 的连续重复次数（含当次；Warn 文案取值用）
+    fn last_streak(&self) -> usize {
+        self.streak
+    }
+
+    /// 回报上次调用的结果：确定性结果（执行成功/被拒绝）重置失败计数；
+    /// 执行失败累加（下一次同签名调用按合法重试放行，连续失败重试则重新计入重复）
+    fn report_outcome(&mut self, ok: bool) {
+        if ok {
+            self.fail_streak = 0;
+        } else {
+            self.fail_streak += 1;
         }
     }
 }
@@ -111,6 +158,82 @@ pub struct RunContext {
     pub sink: Arc<dyn RunEventSink>,
     /// MCP 连接池端口（工具注入 + 调用路由）
     pub mcp: Arc<dyn McpGateway>,
+    /// 插件仓储（启用插件的技能扫描；生产装配传入，测试可用 None）
+    pub plugin_repo: Option<Arc<dyn PluginRepository>>,
+    /// 插件根目录 `~/.cyan/plugins`（技能扫描用；None 时跳过插件技能）
+    pub plugins_dir: Option<std::path::PathBuf>,
+    /// 全局技能目录 `~/.cyan/skills`（技能扫描用；None 时跳过全局技能）
+    pub skills_dir: Option<std::path::PathBuf>,
+}
+
+/// 可用技能摘要（系统提示词注入用）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillDigest {
+    /// 技能 id（= 文件名，kebab-case）
+    pub id: String,
+    /// 名称
+    pub name: String,
+    /// 描述
+    pub description: String,
+    /// 技能文件绝对路径（Read/Bash 可读；`~` 开头）
+    pub file_path: String,
+    /// 来源（global/project/plugin）
+    pub source: String,
+}
+
+/// 收集可用技能（全局 + 启用插件 + 项目三级合并，同名高优先级覆盖；仅保留 enabled）。
+/// 与 SkillService 的合并顺序一致：全局 → 插件（按名排序）→ 项目；各级失败降级为空不阻塞运行。
+async fn collect_skills(ctx: &RunContext, root: &ProjectPath) -> Vec<SkillDigest> {
+    let mut merged: std::collections::BTreeMap<String, (Skill, String)> = Default::default();
+    let mut insert_batch = |skills: Vec<Skill>, dir: &std::path::Path| {
+        for s in skills {
+            let path = dir.join(format!("{}.md", s.id));
+            merged.insert(s.id.clone(), (s, path.to_string_lossy().into_owned()));
+        }
+    };
+    if let Some(dir) = &ctx.skills_dir {
+        insert_batch(
+            skill_fs::scan_skills(dir, SkillSource::Global).unwrap_or_default(),
+            dir,
+        );
+    }
+    if let (Some(repo), Some(plugins_dir)) = (&ctx.plugin_repo, &ctx.plugins_dir) {
+        match repo.list().await {
+            Ok(plugins) => {
+                let mut plugins: Vec<_> =
+                    plugins.into_iter().filter(|p| p.status == PluginStatus::Enabled).collect();
+                plugins.sort_by(|a, b| a.name.cmp(&b.name));
+                for plugin in plugins {
+                    let dir = plugins_dir.join(&plugin.name).join("skills");
+                    insert_batch(
+                        skill_fs::scan_skills(&dir, SkillSource::Plugin(plugin.name.clone()))
+                            .unwrap_or_default(),
+                        &dir,
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "技能注入：插件列表查询失败，跳过插件技能");
+            }
+        }
+    }
+    if let Ok(project_dir) = skill_fs::project_skills_dir(root) {
+        insert_batch(
+            skill_fs::scan_skills(&project_dir, SkillSource::Project).unwrap_or_default(),
+            &project_dir,
+        );
+    }
+    merged
+        .into_values()
+        .filter(|(s, _)| s.enabled)
+        .map(|(s, path)| SkillDigest {
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            file_path: path,
+            source: s.source.as_str().to_string(),
+        })
+        .collect()
 }
 
 /// 内置工具表（下发给 LLM 的 JSON Schema）
@@ -239,14 +362,45 @@ fn builtin_tools() -> Vec<ToolSpec> {
     ]
 }
 
-/// 系统提示词（含 AGENTS.md 项目指令注入）
-fn system_prompt(root: &ProjectPath) -> String {
+/// 系统提示词（含 AGENTS.md 项目指令、已连接 MCP 工具、可用技能注入）。
+/// 注入内容在每次 run 开始与 compaction 重建时实时收集，新会话/新任务自动生效。
+fn system_prompt(
+    root: &ProjectPath,
+    skills: &[SkillDigest],
+    mcp_tools: &[(String, mcp::McpTool)],
+) -> String {
     let mut prompt = format!(
         "你是 cyan，一个运行在用户桌面的 AI 编程 Agent。项目根目录：{}。\n\
-         通过工具完成任务：Read/Grep/Glob 查代码、Edit/MultiEdit/Write 改文件、Bash 执行命令、TodoWrite 维护 TODO、WebFetch 读取公开网页、联网搜索优先使用 mcp__* 搜索类工具（如 open-webSearch 注入的多引擎搜索）。\n\
-         所有文件路径使用相对项目根的相对路径。修改前先 Read 了解上下文。",
+         通过工具完成任务：Read/Grep/Glob 查代码、Edit/MultiEdit/Write 改文件、Bash 执行命令、TodoWrite 维护 TODO、WebFetch 读取公开网页。\n\
+         所有文件路径使用相对项目根的相对路径；需要查看宿主目录内容（技能正文、插件文件、日志等）时，Read/Grep/Glob 允许访问 `~/.cyan`（只读，路径可写 `~/.cyan/...` 或绝对路径）。修改前先 Read 了解上下文。",
         root.root().display()
     );
+    // 已连接 MCP 工具清单：模型能看到工具 schema，这里补充职责说明引导选择
+    if !mcp_tools.is_empty() {
+        let mut lines: Vec<String> = Vec::new();
+        for (server, t) in mcp_tools {
+            let desc = truncate(&t.description, 120);
+            lines.push(format!("- {}: {}", mcp::tool_name(server, &t.name), desc));
+        }
+        prompt.push_str(&format!(
+            "\n\n已连接的 MCP 工具（名称前缀 mcp__<server>__<tool>，可直接调用）：\n{}",
+            lines.join("\n")
+        ));
+    }
+    // 可用技能清单：模型按需 Read 技能文件正文并按其指令执行
+    if !skills.is_empty() {
+        let mut lines: Vec<String> = Vec::new();
+        for s in skills {
+            lines.push(format!(
+                "- {}（{}）：{}；正文：Read {}",
+                s.id, s.source, s.description, s.file_path
+            ));
+        }
+        prompt.push_str(&format!(
+            "\n\n可用技能（匹配用户需求时，先 Read 技能文件正文，再按其中指令完成任务）：\n{}",
+            lines.join("\n")
+        ));
+    }
     // AGENTS.md 项目指令注入（不存在则静默跳过，截断 8KB 由 infra/fs 保证）
     if let Some(agents) = crate::infra::fs::read_agents_md(root) {
         if !agents.trim().is_empty() {
@@ -491,8 +645,13 @@ async fn compact_session(
     if let Err(e) = ctx.session_repo.update(session).await {
         tracing::error!(error = %e, "compaction 更新会话失败");
     }
-    // 重建 LLM 上下文
-    *llm_messages = vec![ChatMessage::text(ChatRole::System, system_prompt(root))];
+    // 重建 LLM 上下文（技能/MCP 清单重新收集，保证压缩后提示词仍是最新）
+    let skills = collect_skills(ctx, root).await;
+    let mcp_tools = ctx.mcp.connected_tools();
+    *llm_messages = vec![ChatMessage::text(
+        ChatRole::System,
+        system_prompt(root, &skills, &mcp_tools),
+    )];
     llm_messages.extend(history_to_chat(&session.messages));
     summary_text
 }
@@ -518,19 +677,23 @@ pub async fn run_loop(
         .into_iter()
         .filter(|t| !disabled_tools.iter().any(|d| d == &t.name))
         .collect();
-    // 注入已连接 MCP server 的工具：`mcp__<server>__<tool>`，schema 原样透传
-    for (server, t) in ctx.mcp.connected_tools() {
-        let name = mcp::tool_name(&server, &t.name);
+    // 注入已连接 MCP server 的工具：`mcp__<server>__<tool>`，schema 原样透传；
+    // 清单同时进系统提示词（让模型知道每个工具的用途）
+    let mcp_tools = ctx.mcp.connected_tools();
+    for (server, t) in &mcp_tools {
+        let name = mcp::tool_name(server, &t.name);
         if disabled_tools.iter().any(|d| d == &name) {
             continue;
         }
         tools.push(ToolSpec {
             name,
-            description: t.description,
-            parameters: t.input_schema,
+            description: t.description.clone(),
+            parameters: t.input_schema.clone(),
         });
     }
-    let mut llm_messages = vec![ChatMessage::text(ChatRole::System, system_prompt(&root))];
+    // 可用技能收集（全局 + 启用插件 + 项目，enabled 过滤；失败降级为空）
+    let skills = collect_skills(&ctx, &root).await;
+    let mut llm_messages = vec![ChatMessage::text(ChatRole::System, system_prompt(&root, &skills, &mcp_tools))];
     llm_messages.extend(history_to_chat(&session.messages));
     let mut total_usage = TokenUsage::default();
     let mut result = RunResult::Done;
@@ -695,7 +858,9 @@ pub async fn run_loop(
         for tc in turn.tool_calls {
             let call = tool_call_from(tc);
             // ---- 重复调用护栏：判定在执行/审批之前（重复调用不触发审批弹窗）----
-            match dup_guard.check(&call.tool, &call.arg) {
+            let verdict = dup_guard.check(&call.tool, &call.input);
+            let guard_streak = dup_guard.last_streak();
+            match verdict {
                 DupVerdict::Abort => {
                     // 连续重复达阈值：落系统提示 + 错误收尾
                     let note = dup_abort_note(DUP_ABORT_AFTER);
@@ -710,21 +875,27 @@ pub async fn run_loop(
                     completed = true;
                     break 'outer;
                 }
-                DupVerdict::Intercept => {
-                    // 不再真正执行：回写拦截说明（照常落库 + ToolStart/ToolEnd 事件）
+                DupVerdict::Intercept | DupVerdict::Warn => {
+                    // 不再真正执行：回写拦截说明/强提醒（照常落库 + ToolStart/ToolEnd 事件）
+                    let warned = matches!(verdict, DupVerdict::Warn);
+                    let output = if warned {
+                        dup_warn_text(guard_streak)
+                    } else {
+                        dup_intercept_text().to_string()
+                    };
+                    let note_label = if warned { "重复调用强提醒" } else { "重复调用已拦截" };
                     ctx.sink.emit(AgentEvent::ToolStart {
                         session_id,
                         call_id: call.call_id.clone(),
                         tool: call.tool.clone(),
                         arg: call.arg.clone(),
                     });
-                    let output = dup_intercept_text().to_string();
                     ctx.sink.emit(AgentEvent::ToolEnd {
                         session_id,
                         call_id: call.call_id.clone(),
                         status: ToolOutputStatus::Ok.as_str().to_string(),
                         output: output.clone(),
-                        note: Some("重复调用已拦截".to_string()),
+                        note: Some(note_label.to_string()),
                     });
                     persist_message(
                         &ctx,
@@ -736,14 +907,14 @@ pub async fn run_loop(
                             "arg": call.arg,
                             "status": ToolOutputStatus::Ok.as_str(),
                             "output": output,
-                            "note": "重复调用已拦截",
+                            "note": note_label,
                         })
                         .to_string(),
                     )
                     .await;
                     llm_messages.push(ChatMessage {
                         role: ChatRole::Tool,
-                        content: dup_intercept_text().to_string(),
+                        content: output,
                         tool_calls: Vec::new(),
                         tool_call_id: Some(call.call_id),
                     });
@@ -878,6 +1049,8 @@ pub async fn run_loop(
                     .to_string(),
                 )
                 .await;
+                // 被拒绝是确定性结果：保留重复计数（原样重发不再打扰用户/规则引擎）
+                dup_guard.report_outcome(true);
                 format!("工具调用被拒绝：{reason}")
             } else {
                 ctx.sink.emit(AgentEvent::ToolStart {
@@ -915,6 +1088,8 @@ pub async fn run_loop(
                     output: out.output.clone(),
                     note: out.note.clone(),
                 });
+                // 执行失败 -> 失败计数 +1（下次同签名调用按合法重试放行一次）；成功 -> 重置
+                dup_guard.report_outcome(out.status == ToolOutputStatus::Ok);
                 // checkpoint 落库 + change_add 事件
                 if let Some(cp) = &out.checkpoint {
                     let mut checkpoint = Checkpoint::new(
@@ -1035,12 +1210,46 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = ProjectPath::new(tmp.path()).unwrap();
         // 无 AGENTS.md：不含项目指令段
-        let prompt = system_prompt(&root);
+        let prompt = system_prompt(&root, &[], &[]);
         assert!(!prompt.contains("AGENTS.md"));
         // 存在 AGENTS.md：拼接到末尾
         std::fs::write(tmp.path().join("AGENTS.md"), "提交信息用中文").unwrap();
-        let prompt = system_prompt(&root);
+        let prompt = system_prompt(&root, &[], &[]);
         assert!(prompt.contains("项目指令（AGENTS.md，须遵守）：\n提交信息用中文"));
+    }
+
+    #[test]
+    fn system_prompt_injects_skills_and_mcp_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = ProjectPath::new(tmp.path()).unwrap();
+        let skills = vec![SkillDigest {
+            id: "weekly-report".into(),
+            name: "周报".into(),
+            description: "生成周报".into(),
+            file_path: "~/.cyan/skills/weekly-report.md".into(),
+            source: "global".into(),
+        }];
+        let mcp_tools = vec![(
+            "cyancat".to_string(),
+            mcp::McpTool {
+                name: "query".into(),
+                description: "查询数据库".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            },
+        )];
+        let prompt = system_prompt(&root, &skills, &mcp_tools);
+        // 技能清单：id/来源/描述/正文路径
+        assert!(prompt.contains("可用技能"));
+        assert!(prompt.contains("- weekly-report（global）：生成周报；正文：Read ~/.cyan/skills/weekly-report.md"));
+        // MCP 清单：mcp__<server>__<tool> + 描述
+        assert!(prompt.contains("已连接的 MCP 工具"));
+        assert!(prompt.contains("- mcp__cyancat__query: 查询数据库"));
+        // 基础说明含 ~/.cyan 只读白名单提示
+        assert!(prompt.contains("~/.cyan"));
+        // 空清单时不注入空段落
+        let bare = system_prompt(&root, &[], &[]);
+        assert!(!bare.contains("可用技能"));
+        assert!(!bare.contains("已连接的 MCP 工具"));
     }
 
     #[test]
@@ -1288,6 +1497,9 @@ mod tests {
             executor: Arc::new(BuiltinToolExecutor),
             sink,
             mcp,
+            plugin_repo: None,
+            plugins_dir: None,
+            skills_dir: None,
         };
         (ctx, session, root, tmp)
     }
@@ -1468,29 +1680,83 @@ mod tests {
     fn dup_call_guard_verdicts() {
         let mut g = DupCallGuard::default();
         // 首次：正常执行
-        assert_eq!(g.check("Read", "a.rs"), DupVerdict::Proceed);
-        // 第 2-5 次连续相同：拦截
-        for _ in 0..(DUP_ABORT_AFTER - 2) {
-            assert_eq!(g.check("Read", "a.rs"), DupVerdict::Intercept);
+        assert_eq!(g.check("Read", &json!({"path": "a.rs"})), DupVerdict::Proceed);
+        // 第 2 ~ (WARN-1) 次连续相同：拦截
+        for _ in 0..(DUP_WARN_AFTER - 1) {
+            assert_eq!(g.check("Read", &json!({"path": "a.rs"})), DupVerdict::Intercept);
         }
-        // 第 6 次连续相同：中止
-        assert_eq!(g.check("Read", "a.rs"), DupVerdict::Abort);
+        // 第 WARN ~ (ABORT-1) 次：强提醒（给模型缓冲带）
+        for _ in 0..(DUP_ABORT_AFTER - DUP_WARN_AFTER - 1) {
+            assert_eq!(g.check("Read", &json!({"path": "a.rs"})), DupVerdict::Warn);
+        }
+        // 第 ABORT 次连续相同：中止
+        assert_eq!(g.check("Read", &json!({"path": "a.rs"})), DupVerdict::Abort);
+        assert_eq!(g.last_streak(), DUP_ABORT_AFTER);
         // 穿插不同调用会重置计数
         let mut g = DupCallGuard::default();
-        g.check("Read", "a.rs");
-        g.check("Read", "a.rs"); // dup 1
-        g.check("Read", "b.rs"); // 重置
-        assert_eq!(g.check("Read", "b.rs"), DupVerdict::Intercept);
+        g.check("Read", &json!({"path": "a.rs"}));
+        g.check("Read", &json!({"path": "a.rs"})); // dup 1
+        g.check("Read", &json!({"path": "b.rs"})); // 重置
+        assert_eq!(g.check("Read", &json!({"path": "b.rs"})), DupVerdict::Intercept);
         // mcp 工具同样生效
         let mut g = DupCallGuard::default();
-        g.check("mcp__fs__read", "x");
-        assert_eq!(g.check("mcp__fs__read", "x"), DupVerdict::Intercept);
+        g.check("mcp__fs__read", &json!({"path": "x"}));
+        assert_eq!(g.check("mcp__fs__read", &json!({"path": "x"})), DupVerdict::Intercept);
+    }
+
+    #[test]
+    fn dup_guard_full_param_signature_no_false_positive() {
+        // 同一文件、不同编辑内容：签名不同，连续执行不误拦（MultiEdit 场景）
+        let mut g = DupCallGuard::default();
+        assert_eq!(
+            g.check("MultiEdit", &json!({"path": "mcp.rs", "edits": [{"old": "a", "new": "b"}]})),
+            DupVerdict::Proceed
+        );
+        assert_eq!(
+            g.check("MultiEdit", &json!({"path": "mcp.rs", "edits": [{"old": "c", "new": "d"}]})),
+            DupVerdict::Proceed
+        );
+        assert_eq!(
+            g.check("MultiEdit", &json!({"path": "mcp.rs", "edits": [{"old": "e", "new": "f"}]})),
+            DupVerdict::Proceed
+        );
+        // TodoWrite 无 path/command 主参数，旧签名恒为空串必误拦；全量签名按内容区分
+        let mut g = DupCallGuard::default();
+        assert_eq!(
+            g.check("TodoWrite", &json!({"todos": [{"id": 1, "content": "a", "status": "pending"}]})),
+            DupVerdict::Proceed
+        );
+        assert_eq!(
+            g.check("TodoWrite", &json!({"todos": [{"id": 1, "content": "a", "status": "in_progress"}]})),
+            DupVerdict::Proceed
+        );
+    }
+
+    #[test]
+    fn dup_guard_failed_retry_allowed_once() {
+        // 执行失败 -> 原样重试一次放行（网络抖动等瞬时错误）
+        let mut g = DupCallGuard::default();
+        assert_eq!(g.check("Bash", &json!({"command": "curl x.dev"})), DupVerdict::Proceed);
+        g.report_outcome(false); // 失败
+        assert_eq!(g.check("Bash", &json!({"command": "curl x.dev"})), DupVerdict::Proceed);
+        g.report_outcome(false); // 重试仍失败
+        // 第二次原样重试：不再放行
+        assert_eq!(g.check("Bash", &json!({"command": "curl x.dev"})), DupVerdict::Intercept);
+
+        // 重试成功后：失败计数清零，再原样调用才是真重复
+        let mut g = DupCallGuard::default();
+        g.check("Bash", &json!({"command": "curl x.dev"}));
+        g.report_outcome(false);
+        assert_eq!(g.check("Bash", &json!({"command": "curl x.dev"})), DupVerdict::Proceed);
+        g.report_outcome(true); // 重试成功
+        assert_eq!(g.check("Bash", &json!({"command": "curl x.dev"})), DupVerdict::Intercept);
     }
 
     #[test]
     fn dup_guard_texts() {
         assert!(dup_intercept_text().contains("重复调用已拦截"));
-        assert!(dup_abort_note(6).contains("连续 6 次"));
+        assert!(dup_abort_note(DUP_ABORT_AFTER).contains("连续 20 次"));
+        assert!(dup_warn_text(DUP_WARN_AFTER + 1).contains("警告"));
     }
 
     /// 计数执行器：记录真实执行次数
@@ -1558,6 +1824,9 @@ mod tests {
             executor,
             sink,
             mcp,
+            plugin_repo: None,
+            plugins_dir: None,
+            skills_dir: None,
         };
         (ctx, session, root, tmp)
     }
@@ -1604,7 +1873,7 @@ mod tests {
             })
             .count();
         assert_eq!(sys_notes, 1, "应落一条循环中止系统消息");
-        // 拦截文案进入工具消息（第 2-5 次拦截）
+        // 拦截文案进入工具消息（第 2~WARN-1 次拦截），WARN 档为强提醒文案
         let intercepted = msgs
             .iter()
             .filter(|m| {
@@ -1613,7 +1882,20 @@ mod tests {
                     && m.payload.contains("重复调用已拦截")
             })
             .count();
-        assert_eq!(intercepted, DUP_ABORT_AFTER - 2, "第 2-5 次应被拦截");
+        assert_eq!(intercepted, DUP_WARN_AFTER - 1, "第 2~3 次应被拦截");
+        let warned = msgs
+            .iter()
+            .filter(|m| {
+                m.kind == MessageKind::Tool
+                    && m.text().is_none()
+                    && m.payload.contains("重复调用强提醒")
+            })
+            .count();
+        assert_eq!(
+            warned,
+            DUP_ABORT_AFTER - DUP_WARN_AFTER - 1,
+            "第 WARN~ABORT-1 次应为强提醒"
+        );
     }
 
     /// 永远返回同一 Read 调用的 LLM（护栏测试专用）

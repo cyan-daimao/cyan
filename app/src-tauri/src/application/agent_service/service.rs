@@ -10,6 +10,7 @@ use crate::domain::agent::{
     RunEventSink, ToolExecutor,
 };
 use crate::domain::config::{ModelRepository, PermRuleRepository, PermissionRule, RuleScope};
+use crate::domain::plugin::PluginRepository;
 use crate::domain::project::ProjectRepository;
 use crate::domain::session::{Message, MessageKind, MessageRepository, SessionRepository};
 use crate::domain::shared::ProjectPath;
@@ -62,6 +63,9 @@ impl AgentServiceImpl {
         checkpoint_gateway: Arc<dyn CheckpointGateway>,
         sink: Arc<dyn RunEventSink>,
         mcp: Arc<dyn McpGateway>,
+        plugin_repo: Option<Arc<dyn PluginRepository>>,
+        plugins_dir: Option<std::path::PathBuf>,
+        skills_dir: Option<std::path::PathBuf>,
     ) -> Self {
         let ctx = RunContext {
             session_repo: session_repo.clone(),
@@ -72,6 +76,9 @@ impl AgentServiceImpl {
             executor,
             sink,
             mcp,
+            plugin_repo,
+            plugins_dir,
+            skills_dir,
         };
         Self {
             ctx,

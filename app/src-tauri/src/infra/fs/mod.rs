@@ -1,12 +1,21 @@
 //! 文件系统：文件树读取（忽略规则 + 深度限制）、文件预览（≤64KB 截断、二进制拒绝）、脚手架写入、
 //! Glob/Grep 只读搜索、AGENTS.md 项目指令读取。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::domain::shared::ProjectPath;
 use crate::domain::DomainError;
 
 pub mod skill;
+
+/// Agent 只读白名单：`~/.cyan` 宿主目录（技能/插件文件/日志等）。
+/// Read/Grep/Glob 对其中文件的读取放行；写入类工具不走白名单（仍限项目内）。
+fn readonly_allowlist() -> Vec<PathBuf> {
+    match crate::infra::db::datasource::cyan_home() {
+        Ok(home) => vec![home],
+        Err(_) => Vec::new(),
+    }
+}
 
 /// 单文件预览上限（64KB，TECH_DESIGN 第 7 章）
 pub const PREVIEW_LIMIT: usize = 64 * 1024;
@@ -68,9 +77,9 @@ fn walk(root: &ProjectPath, dir: &Path, depth: usize) -> Result<Vec<FsNode>, Dom
     Ok(nodes)
 }
 
-/// 文件预览：逃逸校验 + 二进制拒绝 + ≤64KB 截断，返回 (内容, 是否截断)
+/// 文件预览：只读逃逸校验（含 `~/.cyan` 白名单）+ 二进制拒绝 + ≤64KB 截断，返回 (内容, 是否截断)
 pub fn preview_file(root: &ProjectPath, rel_path: &str) -> Result<(String, bool), DomainError> {
-    let abs = root.resolve(rel_path)?;
+    let abs = root.resolve_readonly(rel_path, &readonly_allowlist())?;
     if abs.is_dir() {
         return Err(DomainError::Validation("目标是目录，无法预览".into()));
     }
@@ -86,10 +95,10 @@ pub fn preview_file(root: &ProjectPath, rel_path: &str) -> Result<(String, bool)
     Ok((content, truncated))
 }
 
-/// 读取文件全文（工具执行用，限制 256KB 防内存爆炸）
+/// 读取文件全文（工具执行用，限制 256KB 防内存爆炸；只读，允许 `~/.cyan` 白名单）
 pub fn read_text_file(root: &ProjectPath, rel_path: &str) -> Result<String, DomainError> {
     const READ_LIMIT: usize = 256 * 1024;
-    let abs = root.resolve(rel_path)?;
+    let abs = root.resolve_readonly(rel_path, &readonly_allowlist())?;
     let bytes =
         std::fs::read(&abs).map_err(|e| DomainError::Validation(format!("读取文件失败：{e}")))?;
     if bytes.len() > READ_LIMIT {
@@ -128,11 +137,11 @@ const GREP_FILE_LIMIT: u64 = 1024 * 1024;
 /// AGENTS.md 读取上限（8KB）
 const AGENTS_MD_LIMIT: usize = 8 * 1024;
 
-/// 解析可选子目录（相对项目根），缺省返回项目根
+/// 解析可选子目录（相对项目根），缺省返回项目根；只读搜索（Glob/Grep）允许 `~/.cyan` 白名单内目录
 fn resolve_base(root: &ProjectPath, path: Option<&str>) -> Result<std::path::PathBuf, DomainError> {
     match path {
         Some(p) if !p.trim().is_empty() => {
-            let abs = root.resolve(p)?;
+            let abs = root.resolve_readonly(p, &readonly_allowlist())?;
             if !abs.is_dir() {
                 return Err(DomainError::Validation(format!("不是目录：{p}")));
             }

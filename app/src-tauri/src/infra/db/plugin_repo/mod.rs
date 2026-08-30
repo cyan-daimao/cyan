@@ -170,6 +170,23 @@ impl PluginRepository for PluginRepositoryImpl {
         Ok(())
     }
 
+    async fn hard_delete(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM cyan_plugin WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn hard_delete_by_name(&self, name: &str) -> anyhow::Result<()> {
+        // 仅清软删行（deleted_at 非空），不触碰在用记录
+        sqlx::query("DELETE FROM cyan_plugin WHERE name = ? AND deleted_at IS NOT NULL")
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn list_deleted(&self) -> anyhow::Result<Vec<Plugin>> {
         let rows = sqlx::query_as::<_, PluginDO>(&format!(
             "SELECT {SELECT_COLS} FROM cyan_plugin WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"

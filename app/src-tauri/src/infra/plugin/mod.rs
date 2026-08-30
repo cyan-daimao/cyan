@@ -176,6 +176,12 @@ fn extract_zip(zip_path: &Path, target: &Path) -> Result<(), DomainError> {
             .map_err(|e| DomainError::Validation(format!("写入文件失败：{e}")))?;
         std::io::copy(&mut f, &mut w)
             .map_err(|e| DomainError::Validation(format!("解压文件失败：{e}")))?;
+        // 保留 zip 条目的 unix 权限位：sidecar 二进制（如 ./cyancatd）丢失可执行位会 spawn EACCES
+        #[cfg(unix)]
+        if let Some(mode) = f.unix_mode().filter(|m| *m != 0) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = w.set_permissions(std::fs::Permissions::from_mode(mode & 0o777));
+        }
     }
     Ok(())
 }
@@ -326,6 +332,38 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn zip_preserves_exec_permission() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let src = tempfile::tempdir().unwrap();
+        let zip_path = src.path().join("bin-plugin.zip");
+        let file = std::fs::File::create(&zip_path).unwrap();
+        let mut zw = zip::ZipWriter::new(file);
+        // 带 755 权限的二进制条目（sidecar 场景：backend.command = ./server）
+        let opts = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
+        zw.start_file("bin-plugin/manifest.json", opts).unwrap();
+        std::io::Write::write_all(
+            &mut zw,
+            br#"{"name":"bin-plugin","version":"1.0.0","author":"a","description":"d","permissions":["backend"]}"#,
+        )
+        .unwrap();
+        zw.start_file("bin-plugin/server", opts).unwrap();
+        std::io::Write::write_all(&mut zw, b"#!/bin/sh\nsleep 30\n").unwrap();
+        zw.finish().unwrap();
+
+        let plugins = tempfile::tempdir().unwrap();
+        let manifest = read_manifest_from_source(&zip_path).unwrap();
+        let target = extract_package(&zip_path, plugins.path(), &manifest.name).unwrap();
+        // 解压后可执行位保留（丢失则 sidecar spawn 报 os error 13）
+        let mode = std::fs::metadata(target.join("server"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[test]
     fn manifest_missing_or_invalid() {
         let src = tempfile::tempdir().unwrap();
         assert!(read_manifest_from_source(src.path()).is_err());
@@ -335,11 +373,11 @@ mod tests {
 
     #[test]
     fn manifest_backend_section_parsed() {
-        // 与 plugin_service 测试构造的 backend manifest 同款 JSON
+        // 与 plugin_service 测试构造的 backend manifest 同款 JSON（含 frontendUrl）
         let command = "false";
         let health = ",\"healthPath\":\"/health\"";
         let text = format!(
-            r#"{{"name":"backend-plugin","version":"1.0.0","author":"","description":"d","permissions":["backend","rules"],"backend":{{"command":"{command}"{health},"mcp":{{"name":"bp-mcp","url":"http://127.0.0.1:{{port}}/sse"}}}}}}"#
+            r#"{{"name":"backend-plugin","version":"1.0.0","author":"","description":"d","permissions":["backend","rules"],"backend":{{"command":"{command}"{health},"mcp":{{"name":"bp-mcp","url":"http://127.0.0.1:{{port}}/sse"}},"frontendUrl":"http://127.0.0.1:{{port}}/"}}}}"#
         );
         let m = parse_manifest(&text).unwrap();
         let backend = m.backend.expect("backend 段应解析成功");
@@ -348,5 +386,9 @@ mod tests {
         let mcp = backend.mcp.expect("mcp 声明应解析成功");
         assert_eq!(mcp.name, "bp-mcp");
         assert_eq!(mcp.url, "http://127.0.0.1:{port}/sse");
+        assert_eq!(
+            backend.frontend_url.as_deref(),
+            Some("http://127.0.0.1:{port}/")
+        );
     }
 }

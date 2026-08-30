@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Alert, Button, Segmented, Switch, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { FileZipOutlined, FolderOpenOutlined } from '@ant-design/icons';
+import { FileZipOutlined, FolderOpenOutlined, GlobalOutlined } from '@ant-design/icons';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import type { PluginDTO } from '../../types';
 import { usePluginStore } from '../../stores/pluginStore';
 import { confirmDanger, toast } from '../../utils/feedback';
@@ -124,30 +125,43 @@ export function PluginsTab() {
     {
       title: '操作',
       key: 'ops',
-      width: 90,
+      width: 130,
       render: (_, p) => (
-        <Button
-          type="link"
-          size="small"
-          danger
-          onClick={() =>
-            confirmDanger({
-              title: '卸载插件',
-              content: (
-                <span>
-                  确定卸载插件 <b>{p.name}</b> 吗？将连带摘除其携带的技能（{p.skillCount}）、MCP
-                  服务器（{p.mcpCount}）与权限规则（{p.ruleCount}）。
-                </span>
-              ),
-              okText: '卸载',
-              onOk: async () => {
-                if (await remove(p.id)) toast.success(`已卸载 ${p.name}`);
-              },
-            })
-          }
-        >
-          卸载
-        </Button>
+        <span style={{ display: 'inline-flex', gap: 4 }}>
+          {/* 声明了 frontendUrl 且后端运行中才可打开 */}
+          {p.backendFrontendUrl ? (
+            <Button
+              type="link"
+              size="small"
+              icon={<GlobalOutlined />}
+              onClick={() => void openUrl(p.backendFrontendUrl!)}
+            >
+              打开页面
+            </Button>
+          ) : null}
+          <Button
+            type="link"
+            size="small"
+            danger
+            onClick={() =>
+              confirmDanger({
+                title: '卸载插件',
+                content: (
+                  <span>
+                    确定卸载插件 <b>{p.name}</b> 吗？将连带摘除其携带的技能（{p.skillCount}）、MCP
+                    服务器（{p.mcpCount}）与权限规则（{p.ruleCount}）。
+                  </span>
+                ),
+                okText: '卸载',
+                onOk: async () => {
+                  if (await remove(p.id)) toast.success(`已卸载 ${p.name}`);
+                },
+              })
+            }
+          >
+            卸载
+          </Button>
+        </span>
       ),
     },
   ];

@@ -98,6 +98,8 @@ impl PluginServiceImpl {
                 )));
             }
             None => {
+                // 重装自愈：软删行仍占 name UNIQUE，插入前清掉同名软删脏数据
+                self.mcp_repo.hard_delete_by_name(name).await?;
                 // sidecar URL / 声明命令：按前缀自动判定传输方式
                 let transport = if McpTransport::is_remote_url(command) {
                     McpTransport::Sse
@@ -206,11 +208,18 @@ impl PluginServiceImpl {
         Ok((Some(info.port), mcp_added))
     }
 
-    /// 用实时 sidecar 状态填充 BO
+    /// 用实时 sidecar 状态填充 BO（含 frontendUrl 的 {port} 替换，仅运行中时有值）
     fn fill_backend_status(&self, bo: &mut PluginBO) {
         let status = self.sidecar.status(&bo.name);
         bo.backend_running = status.running;
         bo.backend_port = status.port;
+        if let Some(port) = status.port.filter(|_| status.running) {
+            bo.backend_frontend_url =
+                plugin_fs::read_installed_manifest(&self.plugin_dir(&bo.name))
+                    .ok()
+                    .and_then(|m| m.backend.and_then(|b| b.frontend_url))
+                    .map(|url| url.replace("{port}", &port.to_string()));
+        }
     }
 }
 
@@ -237,20 +246,38 @@ impl PluginService for PluginServiceImpl {
             )));
         }
         let manifest = plugin_fs::read_manifest_from_source(source)?;
+        let mut plugin = Plugin::from_manifest(&manifest, (0, 0, 0), now_local());
+        // 清掉同名软删脏数据：旧版本卸载走软删，行仍占用 name UNIQUE 约束，
+        // 重装 INSERT 会报 (2067) UNIQUE constraint failed: cyan_plugin.name
+        self.plugin_repo.hard_delete_by_name(&manifest.name).await?;
         if self.plugin_repo.find_by_name(&manifest.name).await?.is_some() {
             return Err(ServiceError::conflict(format!("插件已安装：{}", manifest.name)));
+        }
+        // 无记录的同名残留目录：上次安装中断/落库失败的孤儿目录，删除后重装（自愈）
+        let dir = self.plugin_dir(&manifest.name);
+        if dir.exists() {
+            tracing::warn!(
+                plugin = %manifest.name,
+                dir = %dir.display(),
+                "发现无插件记录的同名残留目录，删除后重装"
+            );
+            std::fs::remove_dir_all(&dir)
+                .map_err(|e| ServiceError::external(format!("残留插件目录删除失败：{e}")))?;
         }
         let dir = plugin_fs::extract_package(source, &self.plugins_dir, &manifest.name)?;
         let counts = match self.register_contents(&manifest.name, &dir).await {
             Ok(c) => c,
             Err(e) => {
-                // 注册失败回滚：删目录，规则按 origin 清理
+                // 注册失败回滚：停 sidecar、删目录，规则按 origin 清理
+                self.sidecar.stop(&manifest.name).await;
                 let _ = self.perm_repo.soft_delete_by_plugin_origin(&manifest.name).await;
                 let _ = std::fs::remove_dir_all(&dir);
                 return Err(e);
             }
         };
-        let mut plugin = Plugin::from_manifest(&manifest, counts, now_local());
+        plugin.skill_count = counts.0;
+        plugin.mcp_count = counts.1;
+        plugin.rule_count = counts.2;
         // 声明了 sidecar 后端的插件安装即启用 → 安装时同步启动 sidecar（失败整体回滚）
         if manifest.backend.is_some() {
             if let Err(e) = self.start_backend_if_declared(&manifest.name, &dir).await {
@@ -266,7 +293,13 @@ impl PluginService for PluginServiceImpl {
                 plugin.mcp_count += 1;
             }
         }
-        self.plugin_repo.insert(&mut plugin).await?;
+        if let Err(e) = self.plugin_repo.insert(&mut plugin).await {
+            // 落库失败回滚：停 sidecar、摘内容物、删目录；否则残留孤儿目录，重装报"插件目录已存在"
+            self.sidecar.stop(&manifest.name).await;
+            let _ = self.perm_repo.soft_delete_by_plugin_origin(&manifest.name).await;
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e.into());
+        }
         tracing::info!(plugin = %plugin.name, "插件安装完成");
         let mut bo = PluginBO::from(plugin);
         self.fill_backend_status(&mut bo);
@@ -322,7 +355,8 @@ impl PluginService for PluginServiceImpl {
         let Some(mut plugin) = self.plugin_repo.find_by_id(cmd.id).await? else {
             return Ok(()); // 幂等
         };
-        // 卸载 = disable（含 sidecar 停掉）+ 删目录 + 软删记录
+        // 卸载 = disable（含 sidecar 停掉）+ 删目录 + 物理删除记录（幂等）。
+        // 不走软删：软删行占用 name UNIQUE 约束，重装 INSERT 会报 UNIQUE 冲突。
         self.sidecar.stop(&plugin.name).await;
         if plugin.disable() {
             self.revoke_contents(&plugin.name).await?;
@@ -332,7 +366,7 @@ impl PluginService for PluginServiceImpl {
             std::fs::remove_dir_all(&dir)
                 .map_err(|e| ServiceError::external(format!("删除插件目录失败：{e}")))?;
         }
-        self.plugin_repo.soft_delete(plugin.id).await?;
+        self.plugin_repo.hard_delete(plugin.id).await?;
         tracing::info!(plugin = %plugin.name, "插件已卸载");
         Ok(())
     }
@@ -466,7 +500,7 @@ mod tests {
             .unwrap();
         assert_eq!(again.status, "enabled");
 
-        // 卸载：目录删除 + 记录软删 + 内容物清理
+        // 卸载：目录删除 + 记录物理删除（不进回收站）+ 内容物清理
         svc.delete_plugin(DeletePluginCmd { id: bo.id }).await.unwrap();
         assert!(!plugins_dir.path().join("test-plugin").exists());
         assert!(PluginRepositoryImpl::new(pool.clone())
@@ -474,6 +508,12 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+        // 物理删除：软删列表（回收站）也查无此记录
+        assert!(PluginRepositoryImpl::new(pool.clone())
+            .list_deleted()
+            .await
+            .unwrap()
+            .is_empty());
         assert!(perm_repo
             .find_by_tool_pattern("Bash", "tp *", None, None)
             .await
@@ -485,6 +525,215 @@ mod tests {
         );
         // 幂等卸载
         svc.delete_plugin(DeletePluginCmd { id: bo.id }).await.unwrap();
+    }
+
+    /// insert 必失败的仓储装饰器（验证落库失败回滚，防孤儿目录）
+    struct FailInsertRepo(Arc<dyn PluginRepository>);
+
+    #[async_trait]
+    impl PluginRepository for FailInsertRepo {
+        async fn list(&self) -> anyhow::Result<Vec<Plugin>> {
+            self.0.list().await
+        }
+        async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<Plugin>> {
+            self.0.find_by_id(id).await
+        }
+        async fn find_by_name(&self, name: &str) -> anyhow::Result<Option<Plugin>> {
+            self.0.find_by_name(name).await
+        }
+        async fn insert(&self, _plugin: &mut Plugin) -> anyhow::Result<()> {
+            Err(anyhow::anyhow!("模拟落库失败（如磁盘满/约束冲突）"))
+        }
+        async fn update(&self, plugin: &Plugin) -> anyhow::Result<()> {
+            self.0.update(plugin).await
+        }
+        async fn soft_delete(&self, id: i64) -> anyhow::Result<()> {
+            self.0.soft_delete(id).await
+        }
+        async fn hard_delete(&self, id: i64) -> anyhow::Result<()> {
+            self.0.hard_delete(id).await
+        }
+        async fn hard_delete_by_name(&self, name: &str) -> anyhow::Result<()> {
+            self.0.hard_delete_by_name(name).await
+        }
+        async fn list_deleted(&self) -> anyhow::Result<Vec<Plugin>> {
+            self.0.list_deleted().await
+        }
+        async fn restore(&self, id: i64) -> anyhow::Result<()> {
+            self.0.restore(id).await
+        }
+    }
+
+    /// 无记录的同名残留目录：重装自愈（先删孤儿目录再装），不再报"插件目录已存在"
+    #[sqlx::test(migrations = "./migrations")]
+    async fn install_self_heals_orphan_dir(pool: SqlitePool) {
+        let src = tempfile::tempdir().unwrap();
+        make_pkg(src.path());
+        let plugins_dir = tempfile::tempdir().unwrap();
+        // 模拟上次安装中断留下的孤儿目录（无插件记录，内容是残留物）
+        let orphan = plugins_dir.path().join("test-plugin");
+        std::fs::create_dir_all(orphan.join("stale")).unwrap();
+        std::fs::write(orphan.join("stale/leftover.txt"), "x").unwrap();
+
+        let svc = svc(&pool, plugins_dir.path().to_path_buf());
+        let bo = svc
+            .install_plugin(InstallPluginCmd {
+                source_path: src.path().to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(bo.name, "test-plugin");
+        // 残留物被清掉，目录为全新安装内容
+        assert!(!orphan.join("stale").exists());
+        assert!(orphan.join("manifest.json").exists());
+    }
+
+    /// 落库失败整体回滚：停 sidecar、摘规则、删目录，不留孤儿目录
+    #[sqlx::test(migrations = "./migrations")]
+    async fn install_insert_failure_rolls_back_dir(pool: SqlitePool) {
+        let src = tempfile::tempdir().unwrap();
+        make_pkg(src.path());
+        let plugins_dir = tempfile::tempdir().unwrap();
+        let svc_fail = PluginServiceImpl::new(
+            Arc::new(FailInsertRepo(Arc::new(PluginRepositoryImpl::new(pool.clone())))),
+            Arc::new(McpRepositoryImpl::new(pool.clone())),
+            Arc::new(PermRuleRepositoryImpl::new(pool.clone())),
+            plugins_dir.path().to_path_buf(),
+            Arc::new(crate::infra::sidecar::SidecarManager::new()),
+        );
+
+        let err = svc_fail
+            .install_plugin(InstallPluginCmd {
+                source_path: src.path().to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("模拟落库失败"));
+        // 回滚后无孤儿目录、规则被摘除，重装可成功
+        assert!(
+            !plugins_dir.path().join("test-plugin").exists(),
+            "落库失败后不应残留插件目录"
+        );
+        let perm_repo = PermRuleRepositoryImpl::new(pool.clone());
+        assert!(perm_repo
+            .find_by_tool_pattern("Bash", "tp *", None, None)
+            .await
+            .unwrap()
+            .is_none());
+
+        // 干净状态下重装成功
+        let svc_ok = svc(&pool, plugins_dir.path().to_path_buf());
+        assert!(svc_ok
+            .install_plugin(InstallPluginCmd {
+                source_path: src.path().to_string_lossy().into_owned(),
+            })
+            .await
+            .is_ok());
+    }
+
+    /// 旧版卸载（软删）遗留的脏数据：行占用 name UNIQUE，重装 INSERT 报 (2067)。
+    /// 安装前按名清理软删行 → 重装成功。
+    #[sqlx::test(migrations = "./migrations")]
+    async fn install_purges_soft_deleted_same_name_row(pool: SqlitePool) {
+        let src = tempfile::tempdir().unwrap();
+        make_pkg(src.path());
+        let plugins_dir = tempfile::tempdir().unwrap();
+        let svc = svc(&pool, plugins_dir.path().to_path_buf());
+
+        // 安装 → 模拟旧版卸载（直接软删，目录已删）
+        let bo = svc
+            .install_plugin(InstallPluginCmd {
+                source_path: src.path().to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        PluginRepositoryImpl::new(pool.clone())
+            .soft_delete(bo.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            PluginRepositoryImpl::new(pool.clone()).list_deleted().await.unwrap().len(),
+            1,
+            "前置：软删行已存在（旧版卸载遗留）"
+        );
+
+        // 重装：软删脏行被自动清理，INSERT 不再撞 UNIQUE
+        let reinstalled = svc
+            .install_plugin(InstallPluginCmd {
+                source_path: src.path().to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(reinstalled.name, "test-plugin");
+        assert!(PluginRepositoryImpl::new(pool.clone())
+            .list_deleted()
+            .await
+            .unwrap()
+            .is_empty(), "软删脏行应被清理");
+    }
+
+    /// 插件 MCP 重装自愈：软删的同名 MCP 记录占 name UNIQUE（旧版卸载遗留），
+    /// 安装时按名清理后再注册，不再报 (2067) UNIQUE constraint failed: cyan_mcp_server.name
+    #[sqlx::test(migrations = "./migrations")]
+    async fn install_heals_soft_deleted_plugin_mcp_row(pool: SqlitePool) {
+        let src = tempfile::tempdir().unwrap();
+        make_pkg(src.path());
+        let plugins_dir = tempfile::tempdir().unwrap();
+        let svc = svc(&pool, plugins_dir.path().to_path_buf());
+
+        // 预置一条同名软删 MCP 脏数据（模拟旧版卸载遗留），无任何在用记录
+        let now = crate::infra::db::now_local();
+        sqlx::query(
+            "INSERT INTO cyan_mcp_server (name, command, plugin_origin, created_by, updated_by, created_at, updated_at, deleted_at)
+             VALUES ('tp-fs', 'npx old', 'test-plugin', 'local', 'local', ?, ?, ?)",
+        )
+        .bind(crate::infra::db::fmt_time(&now))
+        .bind(crate::infra::db::fmt_time(&now))
+        .bind(crate::infra::db::fmt_time(&now))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // 安装成功：软删脏行被清理，新记录正常落库
+        svc.install_plugin(InstallPluginCmd {
+            source_path: src.path().to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+        let mcp_repo = McpRepositoryImpl::new(pool.clone());
+        let mcp = mcp_repo
+            .find_by_name("tp-fs")
+            .await
+            .unwrap()
+            .expect("MCP 应重新注册");
+        assert_eq!(mcp.plugin_origin.as_deref(), Some("test-plugin"));
+        assert!(mcp_repo.list_deleted().await.unwrap().is_empty(), "软删脏行应被清理");
+    }
+
+    /// 卸载后立即重装：记录已物理删除，UNIQUE 约束不再阻挡
+    #[sqlx::test(migrations = "./migrations")]
+    async fn delete_then_reinstall_roundtrip(pool: SqlitePool) {
+        let src = tempfile::tempdir().unwrap();
+        make_pkg(src.path());
+        let plugins_dir = tempfile::tempdir().unwrap();
+        let svc = svc(&pool, plugins_dir.path().to_path_buf());
+
+        let bo = svc
+            .install_plugin(InstallPluginCmd {
+                source_path: src.path().to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        svc.delete_plugin(DeletePluginCmd { id: bo.id }).await.unwrap();
+
+        // 重装成功（修复前：软删行占名 → UNIQUE constraint failed）
+        let again = svc
+            .install_plugin(InstallPluginCmd {
+                source_path: src.path().to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(again.name, "test-plugin");
     }
 
     /// 造一个带 sidecar backend 的插件包（command 可配）

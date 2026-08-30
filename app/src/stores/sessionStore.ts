@@ -23,6 +23,12 @@ let textBuf = '';
 let textRaf: number | null = null;
 let thinkBuf = '';
 let thinkRaf: number | null = null;
+/* tool_delta 流式缓冲（按 callId 分组）：Bash 长输出时 delta 频率可达 token 级，
+ * 与 text/thinking 同样用 rAF 节流合并，每帧最多 set 一次。 */
+let toolBuf = new Map<string, string>();
+let toolRaf: number | null = null;
+/** 工具实时输出缓冲上限 50KB，超出保留尾部（截头） */
+const TOOL_LIVE_CAP = 50 * 1024;
 
 function clearDeltaBuffer() {
   textBuf = '';
@@ -34,6 +40,11 @@ function clearDeltaBuffer() {
   if (thinkRaf !== null) {
     cancelAnimationFrame(thinkRaf);
     thinkRaf = null;
+  }
+  toolBuf.clear();
+  if (toolRaf !== null) {
+    cancelAnimationFrame(toolRaf);
+    toolRaf = null;
   }
 }
 
@@ -150,8 +161,9 @@ interface SessionState {
       liveOutput?: string;
     },
   ) => void;
-  /** tool_delta：把 stdout/stderr 增量 append 到运行中工具卡的实时缓冲（50KB 截头） */
+  /** tool_delta：把 stdout/stderr 增量 append 到运行中工具卡的实时缓冲（rAF 节流合并，50KB 截头） */
   appendToolDelta: (callId: string, delta: string) => void;
+  flushToolDelta: () => void;
   updateApproval: (callId: string, state: Exclude<ApprovalState, 'pending'>) => void;
 
   /* ---- 行内编辑（编辑即截断重发） ---- */
@@ -354,6 +366,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   endStreaming: () => {
     get().flushDelta();
     get().flushThinking();
+    get().flushToolDelta();
     const msgs = [...get().messages];
     const last = msgs[msgs.length - 1];
     if (last && last.kind === 'assistant' && last.streaming) {
@@ -365,6 +378,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   updateTool: (callId, patch) => {
     get().flushDelta();
     get().flushThinking();
+    // 先落地缓冲中的实时增量，再应用 tool_end 补丁（最终 output 覆盖 liveOutput）
+    get().flushToolDelta();
     set({
       messages: get().messages.map((n) =>
         n.kind === 'tool' && n.callId === callId ? { ...n, ...patch } : n,
@@ -373,12 +388,30 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   appendToolDelta: (callId, delta) => {
-    const LIVE_CAP = 50 * 1024; // 实时缓冲上限 50KB，超出保留尾部（截头）
+    toolBuf.set(callId, (toolBuf.get(callId) ?? '') + delta);
+    if (toolRaf === null) {
+      toolRaf = requestAnimationFrame(() => {
+        toolRaf = null;
+        get().flushToolDelta();
+      });
+    }
+  },
+
+  flushToolDelta: () => {
+    if (toolRaf !== null) {
+      cancelAnimationFrame(toolRaf);
+      toolRaf = null;
+    }
+    if (toolBuf.size === 0) return;
+    const buf = toolBuf;
+    toolBuf = new Map();
     set({
       messages: get().messages.map((n) => {
-        if (n.kind !== 'tool' || n.callId !== callId || n.status !== 'running') return n;
+        if (n.kind !== 'tool' || n.status !== 'running') return n;
+        const delta = buf.get(n.callId);
+        if (delta === undefined) return n;
         let live = (n.liveOutput ?? '') + delta;
-        if (live.length > LIVE_CAP) live = live.slice(live.length - LIVE_CAP);
+        if (live.length > TOOL_LIVE_CAP) live = live.slice(live.length - TOOL_LIVE_CAP);
         return { ...n, liveOutput: live };
       }),
     });

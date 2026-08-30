@@ -57,6 +57,8 @@ pub struct PluginBO {
     pub backend_running: bool,
     /// sidecar 占用端口（未运行 None）
     pub backend_port: Option<u16>,
+    /// 前端页面 URL（backend.frontendUrl 替换 {port} 后的完整地址；未运行/未声明 None）
+    pub backend_frontend_url: Option<String>,
     /// 安装时间
     pub installed_at: NaiveDateTime,
     /// 软删时间（未删除为 None）
@@ -77,6 +79,7 @@ impl From<Plugin> for PluginBO {
             rule_count: p.rule_count,
             backend_running: false,
             backend_port: None,
+            backend_frontend_url: None,
             installed_at: p.created_at,
             deleted_at: p.deleted_at,
         }

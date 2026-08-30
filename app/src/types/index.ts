@@ -350,6 +350,8 @@ export interface PluginDTO {
   backendRunning: boolean;
   /** sidecar 后端端口（cyan 分配；无 backend 声明为 null） */
   backendPort: number | null;
+  /** 前端页面 URL（backend.frontendUrl 替换端口后；未运行/未声明为 null） */
+  backendFrontendUrl: string | null;
   /** 删除时间（回收站用；未删除为 null） */
   deletedAt?: string | null;
 }

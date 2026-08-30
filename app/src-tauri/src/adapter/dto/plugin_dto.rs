@@ -143,6 +143,8 @@ pub struct PluginDTO {
     pub backend_running: bool,
     /// sidecar 占用端口（未运行 null）
     pub backend_port: Option<u16>,
+    /// 前端页面 URL（backend.frontendUrl 替换端口后；未运行/未声明 null）
+    pub backend_frontend_url: Option<String>,
     /// 安装时间（YYYY-MM-DD HH:MM:SS）
     pub installed_at: String,
     /// 删除时间（未删除为 null）
@@ -163,6 +165,7 @@ impl From<PluginBO> for PluginDTO {
             rule_count: bo.rule_count,
             backend_running: bo.backend_running,
             backend_port: bo.backend_port,
+            backend_frontend_url: bo.backend_frontend_url,
             installed_at: fmt_time(&bo.installed_at),
             deleted_at: bo.deleted_at.as_ref().map(fmt_time),
         }

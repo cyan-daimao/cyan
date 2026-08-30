@@ -209,7 +209,12 @@ export function MessageList({ messages }: MessageListProps) {
       // 打开/切换会话时直接定位到末尾（父组件以会话 id 作为 key 触发重挂载）
       initialTopMostItemIndex={Math.max(messages.length - 1, 0)}
       followOutput="auto"
-      defaultItemHeight={48}
+      // 消息卡实际高度动辄数百到数千像素（Markdown/工具输出），估算值偏小会让
+      // 向下滚动进入未渲染区域时总高被低估 -> 真实节点挂载后高度突变 ->
+      // 滚动位置反复修正（滚动条跳动/白屏/闪烁），取接近真实均值的大值
+      defaultItemHeight={420}
+      // 上下各预渲染约两屏：动态高度修正在可视区外完成，高速滚动不再出现白区
+      increaseViewportBy={{ top: 1600, bottom: 1600 }}
       computeItemKey={(_, node) => node.id}
       itemContent={(index, node) => (
         <div className="chat-inner" style={{ paddingTop: 0, paddingBottom: 0 }}>

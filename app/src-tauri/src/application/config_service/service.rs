@@ -389,8 +389,8 @@ impl ConfigServiceImpl {
         for g in crate::domain::agent::permission::PermissionEngine::builtin_deny_file_globs() {
             push(&mut out, "*", g);
         }
-        // 危险命令片段：仅 Bash，命令串归一化后包含匹配
-        for f in crate::domain::agent::permission::PermissionEngine::builtin_deny_cmd_fragments() {
+        // 危险命令类别：仅 Bash，语法级判定（分段 → token 化 → 程序级判定）
+        for f in crate::domain::agent::permission::PermissionEngine::builtin_deny_cmd_labels() {
             push(&mut out, "Bash", f);
         }
         out
@@ -478,14 +478,14 @@ mod tests {
             s.list_visible_rules(1, 1).await.unwrap(),
         ] {
             let builtins: Vec<_> = listed.iter().filter(|r| r.builtin).collect();
-            assert_eq!(builtins.len(), 9, "内置 deny = 4 敏感文件 glob + 5 危险命令片段");
+            assert_eq!(builtins.len(), 8, "内置 deny = 4 敏感文件 glob + 4 危险命令类别");
             assert!(builtins.iter().all(|r| r.id < 0 && r.action == "deny"));
             assert!(builtins.iter().all(|r| r.deleted_at.is_none()));
             // 敏感文件 glob 对所有工具生效，危险命令仅 Bash
             assert_eq!(builtins.iter().filter(|r| r.tool == "*").count(), 4);
-            assert_eq!(builtins.iter().filter(|r| r.tool == "Bash").count(), 5);
+            assert_eq!(builtins.iter().filter(|r| r.tool == "Bash").count(), 4);
             assert!(builtins.iter().any(|r| r.pattern == ".env"));
-            assert!(builtins.iter().any(|r| r.pattern == "rm -rf /"));
+            assert!(builtins.iter().any(|r| r.pattern.contains("rm")));
         }
         // 用户规则追加在内置之后，不受影响
         let saved = s
@@ -502,7 +502,7 @@ mod tests {
             .await
             .unwrap();
         let listed = s.list_global_rules().await.unwrap();
-        assert_eq!(listed.len(), 10);
+        assert_eq!(listed.len(), 9, "8 内置 deny + 1 用户规则");
         assert!(!listed.last().unwrap().builtin);
         assert_eq!(listed.last().unwrap().id, saved.id);
     }

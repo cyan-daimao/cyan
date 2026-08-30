@@ -66,6 +66,8 @@ pub struct BackendDecl {
     pub health_path: Option<String>,
     /// MCP 声明（可选，sidecar 就绪后注册 MCP 记录）
     pub mcp: Option<BackendMcpDecl>,
+    /// 前端页面 URL 模板（可选；`{port}` 占位符，运行中替换后供面板「打开页面」跳转）
+    pub frontend_url: Option<String>,
 }
 
 /// sidecar 的 MCP 声明
@@ -129,6 +131,18 @@ impl PluginManifest {
                 if !mcp.url.contains("{port}") {
                     return Err(DomainError::Validation(
                         "backend.mcp.url 须包含 {port} 占位符".into(),
+                    ));
+                }
+            }
+            if let Some(url) = &backend.frontend_url {
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    return Err(DomainError::Validation(
+                        "backend.frontendUrl 须为 http(s):// 开头的 URL".into(),
+                    ));
+                }
+                if !url.contains("{port}") {
+                    return Err(DomainError::Validation(
+                        "backend.frontendUrl 须包含 {port} 占位符".into(),
                     ));
                 }
             }
@@ -261,6 +275,7 @@ mod tests {
                 name: "ok".into(),
                 url: "http://127.0.0.1:{port}/sse".into(),
             }),
+            frontend_url: Some("http://127.0.0.1:{port}/".into()),
         });
         assert!(m.validate().is_ok());
 
@@ -270,6 +285,7 @@ mod tests {
             command: "./bin serve".into(),
             health_path: None,
             mcp: None,
+            frontend_url: None,
         });
         let err = m.validate().unwrap_err();
         assert!(err.to_string().contains("backend 权限"));
@@ -280,6 +296,7 @@ mod tests {
             command: "  ".into(),
             health_path: None,
             mcp: None,
+            frontend_url: None,
         });
         assert!(m.validate().is_err());
 
@@ -289,6 +306,7 @@ mod tests {
             command: "./bin".into(),
             health_path: Some("health".into()),
             mcp: None,
+            frontend_url: None,
         });
         assert!(m.validate().is_err());
 
@@ -301,6 +319,27 @@ mod tests {
                 name: "x".into(),
                 url: "http://127.0.0.1/sse".into(),
             }),
+            frontend_url: None,
+        });
+        assert!(m.validate().is_err());
+
+        // frontendUrl 非 http(s) 开头 -> 拒绝
+        let mut m = manifest("ok-plugin", vec!["backend"]);
+        m.backend = Some(BackendDecl {
+            command: "./bin".into(),
+            health_path: None,
+            mcp: None,
+            frontend_url: Some("ftp://127.0.0.1:{port}/".into()),
+        });
+        assert!(m.validate().is_err());
+
+        // frontendUrl 缺 {port} 占位符 -> 拒绝
+        let mut m = manifest("ok-plugin", vec!["backend"]);
+        m.backend = Some(BackendDecl {
+            command: "./bin".into(),
+            health_path: None,
+            mcp: None,
+            frontend_url: Some("http://127.0.0.1/".into()),
         });
         assert!(m.validate().is_err());
     }
