@@ -15,8 +15,9 @@ use crate::infra::db::now_local;
 
 use super::{
     AppendMessageCmd, ClearSessionCmd, CreateSessionCmd, DeleteSessionCmd, EditMessageCmd,
-    GetSessionQuery, ListSessionQuery, MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery,
-    RenameSessionCmd, RestoreSessionCmd, SessionBO, SessionSummaryBO, SetSessionModelCmd,
+    GetSessionQuery, ListMessagesQuery, ListSessionQuery, MessageBO, MessagePageBO,
+    ProjectTokenUsageBO, ProjectTokenUsageQuery, RenameSessionCmd, RestoreSessionCmd, SessionBO,
+    SessionSummaryBO, SetSessionModelCmd,
 };
 
 /// 会话服务
@@ -26,6 +27,8 @@ pub trait SessionService: Send + Sync {
     async fn list_sessions(&self, query: ListSessionQuery) -> Result<Vec<SessionSummaryBO>, ServiceError>;
     /// 打开会话（含全部消息）
     async fn get_session(&self, query: GetSessionQuery) -> Result<SessionBO, ServiceError>;
+    /// 消息游标分页（聊天窗口：尾部一页 / 向前翻页）
+    async fn list_messages(&self, query: ListMessagesQuery) -> Result<MessagePageBO, ServiceError>;
     /// 新建会话
     async fn create_session(&self, cmd: CreateSessionCmd) -> Result<SessionBO, ServiceError>;
     /// 删除会话（软删会话与消息）
@@ -113,6 +116,35 @@ impl SessionService for SessionServiceImpl {
     async fn get_session(&self, query: GetSessionQuery) -> Result<SessionBO, ServiceError> {
         let session = self.load_with_messages(query.session_id).await?;
         Ok(SessionBO::from(session))
+    }
+
+    async fn list_messages(&self, query: ListMessagesQuery) -> Result<MessagePageBO, ServiceError> {
+        // 会话头信息（校验存在 + ctx/token/模型偏好），软删/不存在统一 404
+        let session = self
+            .session_repo
+            .find_by_id(query.session_id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found(format!("会话不存在：{}", query.session_id)))?;
+        let page_size = query.limit.clamp(1, 200);
+        // 多取一条用于探测 has_more，不落库
+        let mut messages = self
+            .message_repo
+            .list_page_by_session(query.session_id, query.before_seq, page_size + 1)
+            .await?;
+        let has_more = messages.len() as i64 > page_size;
+        if has_more {
+            messages.truncate(page_size as usize);
+        }
+        let oldest_seq = messages.first().map(|m| m.seq);
+        Ok(MessagePageBO {
+            messages: messages.into_iter().map(MessageBO::from).collect(),
+            has_more,
+            oldest_seq,
+            ctx_percent: session.ctx_percent,
+            input_tokens: session.input_tokens,
+            output_tokens: session.output_tokens,
+            preferred_model: session.preferred_model,
+        })
     }
 
     async fn create_session(&self, cmd: CreateSessionCmd) -> Result<SessionBO, ServiceError> {

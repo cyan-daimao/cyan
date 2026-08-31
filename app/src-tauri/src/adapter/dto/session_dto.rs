@@ -3,9 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::application::session_service::{
-    ClearSessionCmd, CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListSessionQuery,
-    MessageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery, RenameSessionCmd, RestoreSessionCmd,
-    SessionBO, SessionSummaryBO,
+    ClearSessionCmd, CreateSessionCmd, DeleteSessionCmd, GetSessionQuery, ListMessagesQuery,
+    ListSessionQuery, MessageBO, MessagePageBO, ProjectTokenUsageBO, ProjectTokenUsageQuery,
+    RenameSessionCmd, RestoreSessionCmd, SessionBO, SessionSummaryBO,
 };
 use crate::infra::db::fmt_time;
 
@@ -40,6 +40,28 @@ impl From<GetSessionRequest> for GetSessionQuery {
     fn from(r: GetSessionRequest) -> Self {
         Self {
             session_id: r.session_id,
+        }
+    }
+}
+
+/// list_messages 请求（聊天窗口分页）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMessagesRequest {
+    /// 会话 id
+    pub session_id: i64,
+    /// 游标：取 seq < before_seq 的消息；缺省 = 从尾部开始
+    pub before_seq: Option<i64>,
+    /// 本页条数上限（1..=200，超界收敛）
+    pub limit: i64,
+}
+
+impl From<ListMessagesRequest> for ListMessagesQuery {
+    fn from(r: ListMessagesRequest) -> Self {
+        Self {
+            session_id: r.session_id,
+            before_seq: r.before_seq,
+            limit: r.limit,
         }
     }
 }
@@ -284,6 +306,40 @@ impl From<MessageBO> for MessageDTO {
             kind: bo.kind,
             payload: serde_json::from_str(&bo.payload).unwrap_or(serde_json::Value::Null),
             created_at: fmt_time(&bo.created_at),
+        }
+    }
+}
+
+/// 消息分页 DTO（聊天窗口：尾部一页 / 向前翻页；含会话头信息供打开会话一次性装配）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagePageDTO {
+    /// 消息列表（seq 升序）
+    pub messages: Vec<MessageDTO>,
+    /// 是否还有更早的历史消息
+    pub has_more: bool,
+    /// 下一页游标：本页最早一条的 seq（空页为 None）
+    pub oldest_seq: Option<i64>,
+    /// 上下文占用百分比
+    pub ctx: i64,
+    /// token 统计
+    pub tokens: TokenStatDTO,
+    /// 会话级模型偏好（null = 跟随全局默认模型）
+    pub preferred_model: Option<String>,
+}
+
+impl From<MessagePageBO> for MessagePageDTO {
+    fn from(bo: MessagePageBO) -> Self {
+        Self {
+            messages: bo.messages.into_iter().map(MessageDTO::from).collect(),
+            has_more: bo.has_more,
+            oldest_seq: bo.oldest_seq,
+            ctx: bo.ctx_percent,
+            tokens: TokenStatDTO {
+                input: bo.input_tokens,
+                output: bo.output_tokens,
+            },
+            preferred_model: bo.preferred_model,
         }
     }
 }

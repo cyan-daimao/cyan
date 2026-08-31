@@ -44,6 +44,14 @@ pub trait SessionRepository: Send + Sync {
 pub trait MessageRepository: Send + Sync {
     /// 列出会话全部消息（seq 升序，过滤软删）
     async fn list_by_session(&self, session_id: i64) -> anyhow::Result<Vec<Message>>;
+    /// 游标分页：seq < before_seq（None = 从尾部开始）的消息按 seq 倒序取 limit 条，
+    /// 返回时反转为 seq 升序（聊天窗口向前加载历史用）
+    async fn list_page_by_session(
+        &self,
+        session_id: i64,
+        before_seq: Option<i64>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Message>>;
     /// 插入并回填自增 id
     async fn insert(&self, message: &mut Message) -> anyhow::Result<()>;
     /// 更新消息载荷（审批 pending → 最终决断）

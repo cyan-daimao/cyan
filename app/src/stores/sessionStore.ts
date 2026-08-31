@@ -13,6 +13,9 @@ import { useConfigStore } from './configStore';
 import { useProjectStore } from './projectStore';
 import { useAgentStore } from './agentStore';
 
+/** 聊天窗口默认页大小：打开会话/向前翻页每次加载的消息条数 */
+export const MESSAGE_PAGE_SIZE = 60;
+
 /** 消息节点本地 id 生成（仅前端渲染用，与后端消息 id 无关） */
 let nodeSeq = 0;
 export const newNodeId = () => `n${(nodeSeq += 1)}`;
@@ -124,8 +127,14 @@ interface SessionState {
   sessions: SessionSummaryDTO[];
   /** 当前激活会话 id（后端 i64） */
   activeId: number | null;
-  /** 激活会话的消息流 */
+  /** 激活会话的消息流（尾部窗口；更早历史经 loadOlder 向前加载） */
   messages: ChatNode[];
+  /** 历史是否还有更早消息（窗口分页游标） */
+  hasMore: boolean;
+  /** 下一页游标：窗口内最早一条的后端 seq（空窗口为 null） */
+  oldestSeq: number | null;
+  /** 是否正在向前加载历史 */
+  loadingOlder: boolean;
   /** 会话搜索关键词 */
   searchKw: string;
   loadingList: boolean;
@@ -134,6 +143,8 @@ interface SessionState {
   setSearchKw: (kw: string) => void;
   loadSessions: (projectPath: string, keyword?: string) => Promise<void>;
   openSession: (sessionId: number) => Promise<SessionDTO | null>;
+  /** 向前加载一页历史（prepend，头部 seq 为游标）；无更多/加载中返回 null */
+  loadOlder: () => Promise<number | null>;
   createSession: (projectPath: string) => Promise<number | null>;
   deleteSession: (sessionId: number) => Promise<void>;
   /** 重命名会话标题（同步刷新 sessions 列表；otherSessions 缓存由调用方同步） */
@@ -177,6 +188,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   activeId: null,
   messages: [],
+  hasMore: false,
+  oldestSeq: null,
+  loadingOlder: false,
   searchKw: '',
   loadingList: false,
   loadingMessages: false,
@@ -199,19 +213,62 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     clearDeltaBuffer();
     set({ loadingMessages: true });
     try {
-      const dto = await sessionApi.getSession(sessionId);
-      const messages = dto.messages
+      // 打开即只拉尾部窗口（约一屏半），更早历史由用户上滚时 loadOlder 增量加载；
+      // ctx/token/模型偏好随分页响应一并返回，单次往返完成装配
+      const page = await sessionApi.listMessages(sessionId, undefined, MESSAGE_PAGE_SIZE);
+      const messages = page.messages
         .map(dtoToNode)
         .filter((n): n is ChatNode => n !== null);
-      set({ activeId: sessionId, messages });
+      set({
+        activeId: sessionId,
+        messages,
+        hasMore: page.hasMore,
+        oldestSeq: page.oldestSeq ?? null,
+      });
       // 播种会话级模型偏好（null 则清除该键，跟随全局）
-      useConfigStore.getState().seedSessionModel(dto.id, dto.preferredModel);
+      useConfigStore.getState().seedSessionModel(sessionId, page.preferredModel);
+      // 组装视图态需要的会话摘要（与 SessionDTO 同形）
+      const summary = get().sessions.find((s) => s.id === sessionId);
+      const dto: SessionDTO = {
+        id: sessionId,
+        projectId: 0,
+        title: summary?.title ?? '',
+        ctx: page.ctx,
+        tokens: page.tokens,
+        messages: [],
+        createdAt: '',
+        updatedAt: '',
+      };
       return dto;
     } catch (e) {
       toast.error(`打开会话失败：${errText(e)}`);
       return null;
     } finally {
       set({ loadingMessages: false });
+    }
+  },
+
+  loadOlder: async () => {
+    const { activeId, oldestSeq, loadingOlder, hasMore } = get();
+    if (!hasMore || loadingOlder || activeId === null || oldestSeq === null) return null;
+    set({ loadingOlder: true });
+    try {
+      const page = await sessionApi.listMessages(activeId, oldestSeq, MESSAGE_PAGE_SIZE);
+      if (get().activeId !== activeId) return null; // 期间已切换会话
+      const older = page.messages
+        .map(dtoToNode)
+        .filter((n): n is ChatNode => n !== null);
+      if (older.length > 0) {
+        set({ messages: [...older, ...get().messages], hasMore: page.hasMore, oldestSeq: page.oldestSeq ?? null });
+      } else {
+        set({ hasMore: false });
+      }
+      return older.length;
+    } catch (e) {
+      toast.error(`加载历史消息失败：${errText(e)}`);
+      return null;
+    } finally {
+      set({ loadingOlder: false });
     }
   },
 
@@ -429,9 +486,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   replaceMessages: (dto) => {
     clearDeltaBuffer();
+    // 编辑截断返回剩余全量消息：仍按尾窗收敛，避免超长会话编辑后 DOM 回退全量；
+    // dto 是真实全量（截断语义），游标按截断后头部的后端 seq 重算
+    const windowed = dto.messages.slice(-MESSAGE_PAGE_SIZE);
     set({
       activeId: dto.id,
-      messages: dto.messages.map(dtoToNode).filter((n): n is ChatNode => n !== null),
+      messages: windowed.map(dtoToNode).filter((n): n is ChatNode => n !== null),
+      hasMore: dto.messages.length > MESSAGE_PAGE_SIZE,
+      oldestSeq: windowed.length > 0 ? windowed[0].seq : null,
     });
     // 编辑消息后同步会话级模型偏好
     useConfigStore.getState().seedSessionModel(dto.id, dto.preferredModel);
@@ -441,7 +503,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // 持久化消息的节点 id 即后端消息 id（dtoToNode 用 String(m.id)）
     const direct = Number(nodeId);
     if (nodeId && Number.isInteger(direct)) return direct;
-    // 运行期本地节点（n1/n2…）：拉取持久化会话，按 user/assistant 序号对齐
+    // 运行期本地节点（n1/n2…）：拉取持久化会话，按 user/assistant 序号从尾部对齐
+    // （本地节点必然位于尾部；头部对齐在窗口化丢弃早期消息后会错位）
     const { activeId, messages } = get();
     if (activeId === null) return null;
     try {
@@ -450,7 +513,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const pos = front.findIndex((m) => m.id === nodeId);
       if (pos < 0) return null;
       const back = dto.messages.filter((m) => m.kind === 'user' || m.kind === 'assistant');
-      return pos < back.length ? back[pos].id : null;
+      const fromEnd = front.length - 1 - pos;
+      const backPos = back.length - 1 - fromEnd;
+      return backPos >= 0 ? back[backPos].id : null;
     } catch {
       return null;
     }

@@ -7,9 +7,9 @@ use tauri::State;
 
 use crate::adapter::dto::{
     ClearSessionRequest, CreateSessionRequest, DeleteSessionRequest, EditMessageRequest,
-    GetSessionRequest, ListSessionRequest, ProjectTokenUsageDTO, ProjectTokenUsageRequest,
-    RenameSessionRequest, RestoreSessionRequest, SessionDTO, SessionSummaryDTO,
-    SetSessionModelRequest,
+    GetSessionRequest, ListMessagesRequest, ListSessionRequest, MessagePageDTO,
+    ProjectTokenUsageDTO, ProjectTokenUsageRequest, RenameSessionRequest, RestoreSessionRequest,
+    SessionDTO, SessionSummaryDTO, SetSessionModelRequest,
 };
 use crate::application::session_service::SessionService;
 use crate::error::ServiceError;
@@ -32,6 +32,16 @@ pub async fn get_session(
 ) -> Result<SessionDTO, ServiceError> {
     let bo = svc.get_session(request.into()).await?;
     Ok(SessionDTO::from(bo))
+}
+
+/// 消息游标分页（聊天窗口：尾部一页 / 向前翻页）
+#[tauri::command]
+pub async fn list_messages(
+    svc: State<'_, Arc<dyn SessionService>>,
+    request: ListMessagesRequest,
+) -> Result<MessagePageDTO, ServiceError> {
+    let bo = svc.list_messages(request.into()).await?;
+    Ok(MessagePageDTO::from(bo))
 }
 
 /// 新建会话

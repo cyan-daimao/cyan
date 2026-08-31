@@ -125,3 +125,22 @@ impl From<Session> for SessionBO {
         }
     }
 }
+
+/// 消息分页 BO（聊天窗口：尾部一页 + 向前翻页游标；顺带携带会话头信息供打开会话一次性装配）
+#[derive(Debug, Clone)]
+pub struct MessagePageBO {
+    /// 消息列表（seq 升序）
+    pub messages: Vec<MessageBO>,
+    /// 是否还有更早的历史消息
+    pub has_more: bool,
+    /// 下一页游标：本页最早一条的 seq（前端取 seq < 该值的下一页；空页为 None）
+    pub oldest_seq: Option<i64>,
+    /// 上下文占用百分比
+    pub ctx_percent: i64,
+    /// 累计输入 token
+    pub input_tokens: i64,
+    /// 累计输出 token
+    pub output_tokens: i64,
+    /// 会话级模型偏好（None = 跟随全局默认模型）
+    pub preferred_model: Option<String>,
+}

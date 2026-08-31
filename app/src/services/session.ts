@@ -1,10 +1,12 @@
 import { call } from './invoke';
 import type {
+  MessageDTO,
   ProjectTokenUsageDTO,
   RecycleBinDTO,
   RecycleKind,
   SessionDTO,
   SessionSummaryDTO,
+  Tokens,
 } from '../types';
 
 /** 会话相关命令（参数与 src-tauri session_command.rs / session_dto.rs 一致） */
@@ -14,6 +16,23 @@ export const listSessions = (projectPath: string, keyword?: string) =>
 
 export const getSession = (sessionId: number) =>
   call<SessionDTO>('get_session', { request: { sessionId } });
+
+/** 消息分页 DTO（list_messages 响应；含会话头信息，打开会话单次往返装配） */
+export interface MessagePageDTO {
+  messages: MessageDTO[];
+  hasMore: boolean;
+  /** 下一页游标：本页最早一条的 seq（空页为 null） */
+  oldestSeq: number | null;
+  ctx: number;
+  tokens: Tokens;
+  preferredModel?: string | null;
+}
+
+/** 消息游标分页：beforeSeq 缺省取尾部窗口，否则取 seq < beforeSeq 的一页（升序返回） */
+export const listMessages = (sessionId: number, beforeSeq?: number, limit = 60) =>
+  call<MessagePageDTO>('list_messages', {
+    request: { sessionId, beforeSeq: beforeSeq ?? null, limit },
+  });
 
 export const createSession = (projectPath: string) =>
   call<SessionDTO>('create_session', { request: { projectPath } });

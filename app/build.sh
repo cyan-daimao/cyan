@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# cyan 三平台打包脚本：本机平台构建 + 统一收集 zip 到项目根 bin/ 目录
-#   macOS   → cyan_<ver>_mac_<arch>.zip（内含 cyan.app）+ cyan_<ver>_<arch>.dmg
-#   Linux   → cyan_<ver>_linux_<arch>.zip（内含 AppImage，chmod +x 直接运行）
-#   Windows → cyan_<ver>_windows_<arch>.zip（内含 cyan.exe 便携版 + NSIS 安装器）
+# cyan 打包脚本：本机平台构建 + 统一收集产物到项目根 bin/ 目录
+#   ./build.sh            → 本机平台安装包（mac: app/zip/dmg；linux: AppImage/zip；windows: nsis/zip）
+#   ./build.sh --win      → 在 mac/linux 上交叉编译 Windows 便携版 exe（免安装、无安装器）
+#                           产出 bin/cyan.exe + cyan_<ver>_windows_x86_64.zip
+#   ./build.sh --ci       → CI 模式（跳过图标交互确认）
+#   ./build.sh -b <args>  → 透传 tauri build 参数（跳过默认收集流程）
 #
-# 注意：Tauri 无法交叉编译，本脚本只能产出「当前运行平台」的包；
-#       三个平台的 zip 请用 .github/workflows/build.yml（Actions 一次性产出三平台产物）。
-#
-# 用法：
-#   ./build.sh                 # 本机平台打包，zip（mac 另含 dmg）收集到 ../bin
-#   ./build.sh --ci            # CI 模式（跳过图标交互确认）
-#   ./build.sh -b <target>     # 透传 tauri build 参数（跳过默认收集流程）
+# 产物命名：cyan_<version>_<platform>_<arch>.zip
+# 说明：tauri 无法交叉编译「安装器」；--win 的便携 exe 走 cargo-xwin（MSVC target），
+#       目标机需已装 WebView2 运行时（Win10/11 默认内置）；正式分发建议 CI 三平台原生构建
+#       （.github/workflows/build.yml，windows 产物含便携 exe + NSIS 安装器）。
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 CI_MODE=0
+CROSS_WIN=0
 TAURI_ARGS=()
 for arg in "$@"; do
-  if [[ "$arg" == "--ci" ]]; then
-    CI_MODE=1
-  else
-    TAURI_ARGS+=("$arg")
-  fi
+  case "$arg" in
+    --ci)  CI_MODE=1 ;;
+    --win) CROSS_WIN=1 ;;
+    *)     TAURI_ARGS+=("$arg") ;;
+  esac
 done
 
 ROOT_DIR="$(cd .. && pwd)"
@@ -36,19 +36,18 @@ case "$UNAME" in
   Darwin)                OS="mac" ;;
   Linux)                 OS="linux" ;;
   MINGW*|MSYS*|CYGWIN*)  OS="windows" ;;
-  *) echo "✗ 不支持的平台：$UNAME"; exit 1 ;;
+  *) echo "✗ 不支持的平台：${UNAME}"; exit 1 ;;
 esac
 ARCH="$(uname -m | tr '[:upper:]' '[:lower:]')"
 [[ "$ARCH" == "amd64" ]] && ARCH="x86_64"
 
-ZIP_NAME="cyan_${VERSION}_${OS}_${ARCH}.zip"
-echo "==> 1/6 环境检查（平台：$OS / ${ARCH}）"
+echo "==> 1/6 环境检查（平台：${OS} / ${ARCH}${CROSS_WIN:+，交叉编译 Windows 便携版}）"
 command -v node  >/dev/null || { echo "✗ 未找到 node，请先安装 Node.js 18+"; exit 1; }
 command -v cargo >/dev/null || { echo "✗ 未找到 cargo，请先安装 Rust"; exit 1; }
 echo "  node $(node --version) / cargo $(cargo --version | awk '{print $2}')"
 
-# ---- Linux 系统依赖预检（webkit2gtk-4.1 等，缺了 release 编译必失败）----
-if [[ "$OS" == "linux" ]]; then
+# ---- Linux 系统依赖预检（webkit2gtk-4.1 等，缺了 release 编译必失败；交叉编译 Windows 时不需要）----
+if [[ "$OS" == "linux" && "$CROSS_WIN" -eq 0 ]]; then
   if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
     echo "✗ 缺少 webkit2gtk-4.1 开发库，请先安装："
     echo "  Debian/Ubuntu: sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \\"
@@ -88,10 +87,62 @@ else
 fi
 
 echo "==> 4/6 打包（前端 build + Rust release + bundle，首次约 10-20 分钟）"
+
+# ---- Windows 便携版交叉编译（mac/linux → windows x64）：免安装 exe，无安装器 ----
+if [[ "$CROSS_WIN" -eq 1 ]]; then
+  WIN_TARGET="x86_64-pc-windows-msvc"
+  # 1) rust target
+  INSTALLED_TARGETS="$(rustup target list --installed 2>/dev/null || true)"
+  if [[ "$INSTALLED_TARGETS" != *"$WIN_TARGET"* ]]; then
+    echo "  安装 rust target：${WIN_TARGET}"
+    rustup target add "$WIN_TARGET"
+  fi
+  # 2) cargo-xwin（下载 Windows SDK/CRT 并驱动 clang 交叉链接）
+  if ! command -v cargo-xwin >/dev/null; then
+    echo "  安装 cargo-xwin（首次）..."
+    cargo install cargo-xwin --locked
+  fi
+  # 3) llvm 工具链（clang-cl / lld-link / llvm-rc；Apple clang 不含这些）
+  if ! command -v clang-cl >/dev/null || ! command -v lld-link >/dev/null; then
+    echo "✗ 交叉编译需要 llvm 工具链（clang-cl / lld-link）："
+    echo "    brew install llvm"
+    echo "    export PATH=\"/opt/homebrew/opt/llvm/bin:\$PATH\"   # 然后重跑本脚本"
+    exit 1
+  fi
+  # 4) 只编译不产安装器（-b none），得到裸 exe
+  npx tauri build --runner cargo-xwin --target "$WIN_TARGET" -b none
+  WIN_EXE="src-tauri/target/${WIN_TARGET}/release/cyan.exe"
+  [[ -f "$WIN_EXE" ]] || { echo "✗ 未找到 ${WIN_EXE}"; exit 1; }
+
+  echo "==> 5/6 收集产物到 ${BIN_DIR}"
+  mkdir -p "$BIN_DIR"
+  cp "$WIN_EXE" "$BIN_DIR/cyan.exe"
+  # WebView2Loader.dll：构建若产出则一并附带（部分系统定位运行时需要）
+  LOADER="$(find "src-tauri/target/${WIN_TARGET}/release" -maxdepth 1 -name 'WebView2Loader.dll' 2>/dev/null | head -1 || true)"
+  WIN_ZIP="cyan_${VERSION}_windows_x86_64.zip"
+  rm -f "$BIN_DIR/${WIN_ZIP}"
+  if [[ -n "${LOADER:-}" ]]; then
+    cp "$LOADER" "$BIN_DIR/WebView2Loader.dll"
+    ( cd "$BIN_DIR" && { command -v zip >/dev/null && zip -q "$WIN_ZIP" cyan.exe WebView2Loader.dll || python3 -m zipfile -c "$WIN_ZIP" cyan.exe WebView2Loader.dll; } )
+  else
+    ( cd "$BIN_DIR" && { command -v zip >/dev/null && zip -q "$WIN_ZIP" cyan.exe || python3 -m zipfile -c "$WIN_ZIP" cyan.exe; } )
+  fi
+
+  echo "==> 6/6 完成"
+  echo ""
+  echo "产物（${BIN_DIR}）："
+  ls -lh "$BIN_DIR" | awk 'NR>1 {printf "  ✓ %s (%s)\n", $9, $5}'
+  echo ""
+  echo "便携版说明：${BIN_DIR}/cyan.exe 免安装，拷到 Windows 即用（需系统 WebView2 运行时，Win10/11 默认内置）。"
+  echo "注意：exe 未签名，首次运行可能触发 SmartScreen（点「更多信息 → 仍要运行」）。"
+  echo "如需 Windows 安装器（NSIS setup.exe），请用 .github/workflows/build.yml 原生构建。"
+  exit 0
+fi
+
 if [[ ${#TAURI_ARGS[@]} -gt 0 ]]; then
   # 用户显式指定 target：全权交给 tauri，不做默认收集
   npx tauri build "${TAURI_ARGS[@]}"
-  echo "产物位于 $BUNDLE_DIR/"
+  echo "产物位于 ${BUNDLE_DIR}/"
   exit 0
 fi
 
@@ -104,56 +155,55 @@ case "$OS" in
   windows) npx tauri build -b nsis ;;
 esac
 
-echo "==> 5/6 收集产物到 $BIN_DIR"
+echo "==> 5/6 收集产物到 ${BIN_DIR}"
 mkdir -p "$BIN_DIR"
 
 case "$OS" in
   mac)
     APP_PATH="$BUNDLE_DIR/macos/cyan.app"
     DMG_NAME="cyan_${VERSION}_${ARCH}.dmg"
-    [[ -d "$APP_PATH" ]] || { echo "✗ 未找到 $APP_PATH"; exit 1; }
+    [[ -d "$APP_PATH" ]] || { echo "✗ 未找到 ${APP_PATH}"; exit 1; }
     # .app：可直接执行（未签名首次打开：右键 → 打开）
     rm -rf "$BIN_DIR/cyan.app"
     cp -R "$APP_PATH" "$BIN_DIR/"
     # .zip：ditto 保留 macOS 资源信息，分发常用格式
-    rm -f "$BIN_DIR/$ZIP_NAME"
-    ( cd "$BIN_DIR" && ditto -c -k --sequesterRsrc --keepParent cyan.app "$ZIP_NAME" )
+    rm -f "$BIN_DIR/cyan_${VERSION}_${OS}_${ARCH}.zip"
+    ( cd "$BIN_DIR" && ditto -c -k --sequesterRsrc --keepParent cyan.app "cyan_${VERSION}_${OS}_${ARCH}.zip" )
     # .dmg：hdiutil 直接打包，不挂载、无弹窗
-    rm -f "$BIN_DIR/$DMG_NAME"
-    hdiutil create -volname "cyan" -srcfolder "$BIN_DIR/cyan.app" -ov -format UDZO "$BIN_DIR/$DMG_NAME" >/dev/null
+    rm -f "$BIN_DIR/${DMG_NAME}"
+    hdiutil create -volname "cyan" -srcfolder "$BIN_DIR/cyan.app" -ov -format UDZO "$BIN_DIR/${DMG_NAME}" >/dev/null
     ;;
 
   linux)
     APPIMAGE="$(find "$BUNDLE_DIR/appimage" -maxdepth 1 -name '*.AppImage' 2>/dev/null | head -1)"
     [[ -n "$APPIMAGE" ]] || { echo "✗ 未找到 $BUNDLE_DIR/appimage/*.AppImage"; exit 1; }
-    cp "$APPIMAGE" "$BIN_DIR/cyan_${VERSION}_linux_${ARCH}.AppImage"
-    chmod +x "$BIN_DIR/cyan_${VERSION}_linux_${ARCH}.AppImage"
+    LINUX_EXE="cyan_${VERSION}_linux_${ARCH}.AppImage"
+    cp "$APPIMAGE" "$BIN_DIR/${LINUX_EXE}"
+    chmod +x "$BIN_DIR/${LINUX_EXE}"
     # zip 命令缺失时用 python3 兜底（主流发行版二选一必有）
-    rm -f "$BIN_DIR/$ZIP_NAME"
+    rm -f "$BIN_DIR/cyan_${VERSION}_${OS}_${ARCH}.zip"
     if command -v zip >/dev/null; then
-      ( cd "$BIN_DIR" && zip -q "$ZIP_NAME" "cyan_${VERSION}_linux_${ARCH}.AppImage" )
+      ( cd "$BIN_DIR" && zip -q "cyan_${VERSION}_${OS}_${ARCH}.zip" "$LINUX_EXE" )
     else
-      ( cd "$BIN_DIR" && python3 -m zipfile -c "$ZIP_NAME" "cyan_${VERSION}_linux_${ARCH}.AppImage" )
+      ( cd "$BIN_DIR" && python3 -m zipfile -c "cyan_${VERSION}_${OS}_${ARCH}.zip" "$LINUX_EXE" )
     fi
-    echo "本机运行：./cyan_${VERSION}_linux_${ARCH}.AppImage"
+    echo "本机运行：./${LINUX_EXE}"
     ;;
 
   windows)
     EXE_PATH="src-tauri/target/release/cyan.exe"
-    [[ -f "$EXE_PATH" ]] || { echo "✗ 未找到 $EXE_PATH"; exit 1; }
+    [[ -f "$EXE_PATH" ]] || { echo "✗ 未找到 ${EXE_PATH}"; exit 1; }
     cp "$EXE_PATH" "$BIN_DIR/cyan.exe"
     # NSIS 安装器（存在才放入；tauri 版本/命名可能变化）
     SETUP="$(find "$BUNDLE_DIR/nsis" -maxdepth 1 -name '*-setup.exe' 2>/dev/null | head -1 || true)"
-    PS_PATHS="'cyan.exe'"
     if [[ -n "${SETUP:-}" ]]; then
       cp "$SETUP" "$BIN_DIR/cyan_${VERSION}_x64-setup.exe"
-      PS_PATHS="'cyan.exe','cyan_${VERSION}_x64-setup.exe'"
     fi
     # git-bash 一般无 zip 命令：用 PowerShell Compress-Archive（cd 到 bin 后用相对路径，避免路径转换问题）
-    rm -f "$BIN_DIR/$ZIP_NAME"
+    rm -f "$BIN_DIR/cyan_${VERSION}_${OS}_${ARCH}.zip"
     PS_PATHS="'cyan.exe'"
     [[ -n "${SETUP:-}" ]] && PS_PATHS="'cyan.exe','cyan_${VERSION}_x64-setup.exe'"
-    ( cd "$BIN_DIR" && powershell.exe -NoProfile -Command "Compress-Archive -Path ${PS_PATHS} -DestinationPath '${ZIP_NAME}' -Force" ) >/dev/null
+    ( cd "$BIN_DIR" && powershell.exe -NoProfile -Command "Compress-Archive -Path ${PS_PATHS} -DestinationPath 'cyan_${VERSION}_${OS}_${ARCH}.zip' -Force" ) >/dev/null
     echo "便携版：cyan.exe（需系统自带 WebView2 运行时，Win10/11 默认内置）"
     ;;
 esac

@@ -183,6 +183,7 @@ pub fn run() {
             // 会话
             session_command::list_sessions,
             session_command::get_session,
+            session_command::list_messages,
             session_command::create_session,
             session_command::delete_session,
             session_command::project_token_usage,

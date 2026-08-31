@@ -613,6 +613,75 @@ pre {
   gap: 16px;
 }
 
+/* ============ 消息流容器（dsh ChatView 机制） ============ */
+.chat-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.chat-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 相邻可见行统一 16px 间隔；隐藏/空行不贡献间隔 */
+.chat-inner > :not([hidden]):not(:empty) ~ :not([hidden]):not(:empty) {
+  margin-top: 16px;
+}
+
+/* 向上分页哨兵（触顶自动加载，无需按钮）：20px 高占位保证可命中观察区 */
+.chat-older {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 20px;
+  padding: 0;
+}
+
+.chat-older-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 置底按钮：零高度 sticky 槽不参与 scrollHeight，按钮上移进视口 */
+.to-bottom-slot {
+  position: sticky;
+  bottom: 16px;
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  /* 与消息列同轴右缘（列宽 82%/1280px 居中） */
+  padding-right: max(24px, calc((100% - min(82%, 1280px)) / 2));
+  pointer-events: none;
+  z-index: 5;
+}
+
+.to-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: -34px;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: 100px;
+  color: var(--text);
+  background: var(--bg-hover);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.2s;
+}
+
+.to-bottom:hover {
+  background: var(--brand-tint);
+}
+
 /* ============ 空状态 ============ */
 .empty-state {
   text-align: center;

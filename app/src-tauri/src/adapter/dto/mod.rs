@@ -27,7 +27,8 @@ pub use project_dto::{CreateProjectRequest, OpenProjectRequest, ProjectDTO, Remo
 pub use recycle_dto::{ProjectRecycleDTO, RecycleBinDTO, RestoreRecycleItemRequest};
 pub use session_dto::{
     ClearSessionRequest, CreateSessionRequest, DeleteSessionRequest, GetSessionRequest,
-    ListSessionRequest, MessageDTO, ProjectTokenUsageDTO, ProjectTokenUsageRequest,
+    ListMessagesRequest, ListSessionRequest, MessageDTO, MessagePageDTO,
+    ProjectTokenUsageDTO, ProjectTokenUsageRequest,
     RenameSessionRequest, RestoreSessionRequest, EditMessageRequest, SessionDTO,
     SessionSummaryDTO, SetSessionModelRequest,
 };

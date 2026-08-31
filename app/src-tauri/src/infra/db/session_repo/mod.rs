@@ -349,6 +349,54 @@ impl MessageRepository for MessageRepositoryImpl {
         rows.into_iter().map(Message::try_from).collect()
     }
 
+    async fn list_page_by_session(
+        &self,
+        session_id: i64,
+        before_seq: Option<i64>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Message>> {
+        let limit = limit.clamp(1, 200);
+        let rows = match before_seq {
+            // 游标分页：取 seq < before 的最近 limit 条（倒序取，正序返回）
+            Some(cursor) => {
+                sqlx::query_as::<_, MessageDO>(
+                    "SELECT id, session_id, seq, kind, payload,
+                            created_by, updated_by, created_at, updated_at, deleted_at
+                     FROM cyan_message
+                     WHERE session_id = ? AND deleted_at IS NULL AND seq < ?
+                     ORDER BY seq DESC
+                     LIMIT ?",
+                )
+                .bind(session_id)
+                .bind(cursor)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            // 无游标：直接取尾部 limit 条
+            None => {
+                sqlx::query_as::<_, MessageDO>(
+                    "SELECT id, session_id, seq, kind, payload,
+                            created_by, updated_by, created_at, updated_at, deleted_at
+                     FROM cyan_message
+                     WHERE session_id = ? AND deleted_at IS NULL
+                     ORDER BY seq DESC
+                     LIMIT ?",
+                )
+                .bind(session_id)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        let mut messages = rows
+            .into_iter()
+            .map(Message::try_from)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+
     async fn insert(&self, message: &mut Message) -> anyhow::Result<()> {
         let now = now_local();
         message.created_at = now;
@@ -548,6 +596,56 @@ mod tests {
 
         msg_repo.soft_delete_by_session(s.id).await.unwrap();
         assert!(msg_repo.list_by_session(s.id).await.unwrap().is_empty());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn message_page_returns_tail_window_and_cursor_pages(pool: SqlitePool) {
+        let project_id = seed_project(&pool).await;
+        let session_repo = SessionRepositoryImpl::new(pool.clone());
+        let msg_repo = MessageRepositoryImpl::new(pool.clone());
+
+        let mut s = Session::new(project_id, now_local());
+        session_repo.insert(&mut s).await.unwrap();
+
+        for seq in 1..=7i64 {
+            let mut m = Message::new(
+                s.id,
+                MessageKind::User,
+                Message::text_payload(&format!("m{seq}")),
+                now_local(),
+            );
+            m.seq = seq;
+            msg_repo.insert(&mut m).await.unwrap();
+        }
+
+        // 尾部窗口：无游标取 3 条 → seq 5,6,7（升序返回）
+        let tail = msg_repo.list_page_by_session(s.id, None, 3).await.unwrap();
+        assert_eq!(tail.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![5, 6, 7]);
+
+        // 游标向前翻页：seq < 5 取 3 条 → seq 2,3,4
+        let page2 = msg_repo
+            .list_page_by_session(s.id, Some(5), 3)
+            .await
+            .unwrap();
+        assert_eq!(page2.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![2, 3, 4]);
+
+        // 最后一页不足 limit：seq < 2 取 3 条 → seq 1（升序）
+        let page3 = msg_repo
+            .list_page_by_session(s.id, Some(2), 3)
+            .await
+            .unwrap();
+        assert_eq!(page3.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![1]);
+
+        // 超出头部：空页
+        let page4 = msg_repo
+            .list_page_by_session(s.id, Some(1), 3)
+            .await
+            .unwrap();
+        assert!(page4.is_empty());
+
+        // 软删消息不进窗口
+        msg_repo.soft_delete_by_session(s.id).await.unwrap();
+        assert!(msg_repo.list_page_by_session(s.id, None, 3).await.unwrap().is_empty());
     }
 
     #[sqlx::test(migrations = "./migrations")]
