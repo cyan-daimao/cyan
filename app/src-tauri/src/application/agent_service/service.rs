@@ -12,7 +12,9 @@ use crate::domain::agent::{
 use crate::domain::config::{ModelRepository, PermRuleRepository, PermissionRule, RuleScope};
 use crate::domain::plugin::PluginRepository;
 use crate::domain::project::ProjectRepository;
-use crate::domain::session::{Message, MessageKind, MessageRepository, SessionRepository};
+use crate::domain::session::{
+    Message, MessageImage, MessageKind, MessageRepository, SessionRepository,
+};
 use crate::domain::shared::ProjectPath;
 use crate::error::ServiceError;
 use crate::infra::db::now_local;
@@ -103,13 +105,14 @@ impl AgentServiceImpl {
 }
 
 /// 用户消息准备（start_run 的前置步骤）：
-/// skip_append=false → 首条任务生成标题 + 追加用户消息落库；
+/// skip_append=false → 首条任务生成标题 + 追加用户消息（含图片）落库；
 /// skip_append=true → 校验会话最后一条未删消息为 user kind（编辑重发场景），不新增消息
 async fn prepare_user_message(
     message_repo: &Arc<dyn MessageRepository>,
     session_repo: &Arc<dyn SessionRepository>,
     session: &mut crate::domain::session::Session,
     text: &str,
+    images: &[MessageImage],
     skip_append: bool,
 ) -> Result<(), ServiceError> {
     session.messages = message_repo.list_by_session(session.id).await?;
@@ -128,7 +131,7 @@ async fn prepare_user_message(
         .append_message(Message::new(
             session.id,
             MessageKind::User,
-            Message::text_payload(text.trim()),
+            Message::user_payload(text.trim(), images),
             now_local(),
         ))
         .clone();
@@ -142,6 +145,22 @@ impl AgentService for AgentServiceImpl {
     async fn start_run(&self, cmd: StartRunCmd) -> Result<(), ServiceError> {
         if cmd.text.trim().is_empty() {
             return Err(ServiceError::validation("任务文本不能为空"));
+        }
+        // 图片校验：白名单 MIME + base64 合法性 + 张数/大小上限（domain MessageImage::parse 逐张把关）
+        if cmd.images.len() > 4 {
+            return Err(ServiceError::validation("最多上传 4 张图片"));
+        }
+        let mut images = Vec::with_capacity(cmd.images.len());
+        for img in &cmd.images {
+            match MessageImage::parse(&img.mime, &img.data) {
+                Some(v) => images.push(v),
+                None => {
+                    return Err(ServiceError::validation(format!(
+                        "图片不合法：仅支持 png/jpeg/webp/gif，单张不超过 6MB（{}）",
+                        img.mime
+                    )))
+                }
+            }
         }
         // 校验会话存在 + idle
         let mut session = self
@@ -184,6 +203,7 @@ impl AgentService for AgentServiceImpl {
             &self.session_repo,
             &mut session,
             &cmd.text,
+            &images,
             cmd.skip_append,
         )
         .await?;
@@ -323,7 +343,7 @@ mod tests {
         let mut session = crate::domain::session::Session::new(pid, now_local());
         session_repo.insert(&mut session).await.unwrap();
 
-        prepare_user_message(&msg_repo, &session_repo, &mut session, "你好", false)
+        prepare_user_message(&msg_repo, &session_repo, &mut session, "你好", &[], false)
             .await
             .unwrap();
         let msgs = msg_repo.list_by_session(session.id).await.unwrap();
@@ -340,13 +360,13 @@ mod tests {
         let (msg_repo, session_repo) = repos(&pool);
         let mut session = crate::domain::session::Session::new(pid, now_local());
         session_repo.insert(&mut session).await.unwrap();
-        prepare_user_message(&msg_repo, &session_repo, &mut session, "原始消息", false)
+        prepare_user_message(&msg_repo, &session_repo, &mut session, "原始消息", &[], false)
             .await
             .unwrap();
 
         // skip_append：不新增消息
         let mut session = session_repo.find_by_id(session.id).await.unwrap().unwrap();
-        prepare_user_message(&msg_repo, &session_repo, &mut session, "编辑后的文本", true)
+        prepare_user_message(&msg_repo, &session_repo, &mut session, "编辑后的文本", &[], true)
             .await
             .unwrap();
         let msgs = msg_repo.list_by_session(session.id).await.unwrap();
@@ -361,7 +381,7 @@ mod tests {
         let mut session = crate::domain::session::Session::new(pid, now_local());
         session_repo.insert(&mut session).await.unwrap();
         // 末尾是 assistant 消息
-        prepare_user_message(&msg_repo, &session_repo, &mut session, "问", false)
+        prepare_user_message(&msg_repo, &session_repo, &mut session, "问", &[], false)
             .await
             .unwrap();
         let mut m = Message::new(session.id, MessageKind::Assistant, Message::text_payload("答"), now_local());
@@ -369,7 +389,7 @@ mod tests {
         msg_repo.insert(&mut m).await.unwrap();
 
         let mut session = session_repo.find_by_id(session.id).await.unwrap().unwrap();
-        let err = prepare_user_message(&msg_repo, &session_repo, &mut session, "重发", true)
+        let err = prepare_user_message(&msg_repo, &session_repo, &mut session, "重发", &[], true)
             .await
             .unwrap_err();
         assert_eq!(err.code, 1001);
@@ -378,8 +398,41 @@ mod tests {
         // 空会话同样拒绝
         let mut s2 = crate::domain::session::Session::new(pid, now_local());
         session_repo.insert(&mut s2).await.unwrap();
-        assert!(prepare_user_message(&msg_repo, &session_repo, &mut s2, "重发", true)
+        assert!(prepare_user_message(&msg_repo, &session_repo, &mut s2, "重发", &[], true)
             .await
             .is_err());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn user_message_with_images_persists_images_payload(pool: SqlitePool) {
+        // 带图用户消息：payload 携带 images 数组（mime + base64 data）
+        let (pid, _) = seed(&pool).await;
+        let (msg_repo, session_repo) = repos(&pool);
+        let mut session = crate::domain::session::Session::new(pid, now_local());
+        session_repo.insert(&mut session).await.unwrap();
+
+        let images = vec![MessageImage {
+            mime: "image/png".into(),
+            data: "aGVsbG8=".into(),
+        }];
+        prepare_user_message(&msg_repo, &session_repo, &mut session, "看这张图", &images, false)
+            .await
+            .unwrap();
+        let msgs = msg_repo.list_by_session(session.id).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        let v: serde_json::Value = serde_json::from_str(&msgs[0].payload).unwrap();
+        assert_eq!(v["text"], "看这张图");
+        assert_eq!(v["images"][0]["mime"], "image/png");
+        assert_eq!(v["images"][0]["data"], "aGVsbG8=");
+
+        // 无图：payload 与纯文本同形（无 images 键）
+        let mut s2 = crate::domain::session::Session::new(pid, now_local());
+        session_repo.insert(&mut s2).await.unwrap();
+        prepare_user_message(&msg_repo, &session_repo, &mut s2, "纯文本", &[], false)
+            .await
+            .unwrap();
+        let msgs = msg_repo.list_by_session(s2.id).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&msgs[0].payload).unwrap();
+        assert!(v.get("images").is_none());
     }
 }

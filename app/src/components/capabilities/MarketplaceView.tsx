@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Input, Spin } from 'antd';
+import { Button, Input, Segmented, Spin } from 'antd';
 import { DownloadOutlined, StarOutlined } from '@ant-design/icons';
-import type { MarketItemDTO } from '../../types';
+import type { MarketItemDTO, MarketSource } from '../../types';
 import { installPluginFromGithub, searchMarketplace } from '../../services/plugin';
 import { installSkillFromGithub, searchSkillMarket } from '../../services/skill';
 import { usePluginStore } from '../../stores/pluginStore';
@@ -21,17 +21,33 @@ function parseDirectRepo(kw: string): string | null {
   return owner && repo ? `${owner}/${repo}` : null;
 }
 
+/** 解析 Gitee 仓库地址（gitee.com/owner/repo 或 owner/repo，去掉 .git 后缀） */
+function parseGiteeRepo(kw: string): string | null {
+  const m = kw.trim().match(/(?:gitee\.com\/)?([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/);
+  if (!m) return null;
+  const full = m[1].replace(/\/+$/, '').replace(/\.git$/, '');
+  const [owner, repo] = full.split('/');
+  return owner && repo ? `${owner}/${repo}` : null;
+}
+
 /** 市场维度（插件 / 技能）差异化配置 */
 interface MarketDim {
-  search: (keyword: string) => Promise<MarketItemDTO[]>;
+  search: (keyword: string, source: MarketSource) => Promise<MarketItemDTO[]>;
   /** 安装（内部处理 toast 与对应 store 刷新） */
-  install: (fullName: string) => Promise<void>;
+  install: (fullName: string, source: MarketSource) => Promise<void>;
   emptyText: string;
   isInstalled: (fullName: string) => boolean;
 }
 
+/** 源切换选项 */
+const SOURCE_OPTIONS = [
+  { label: 'GitHub', value: 'github' },
+  { label: 'Gitee（国内）', value: 'gitee' },
+];
+
 /** 市场搜索面板：插件与技能两个维度共用（各自持有独立实例状态） */
 function MarketSearchPanel({ dim }: { dim: MarketDim }) {
+  const [source, setSource] = useState<MarketSource>('github');
   const [keyword, setKeyword] = useState('');
   const [items, setItems] = useState<MarketItemDTO[]>([]);
   const [loading, setLoading] = useState(false);
@@ -39,10 +55,10 @@ function MarketSearchPanel({ dim }: { dim: MarketDim }) {
   /** 安装中的 fullName */
   const [installing, setInstalling] = useState<string | null>(null);
 
-  const search = async (kw: string) => {
+  const search = async (kw: string, src: MarketSource) => {
     setLoading(true);
     try {
-      setItems(await dim.search(kw));
+      setItems(await dim.search(kw, src));
       setSearched(true);
     } catch (e) {
       toast.error(`搜索市场失败：${errText(e)}`);
@@ -51,16 +67,24 @@ function MarketSearchPanel({ dim }: { dim: MarketDim }) {
     }
   };
 
-  // 初始进入用空 keyword 加载推荐列表
+  // 初始进入用空 keyword 加载推荐列表（GitHub 源）
   useEffect(() => {
-    void search('');
+    void search('', 'github');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onInstall = async (fullName: string) => {
+  // 切源：GitHub 重新拉推荐列表；Gitee 清空列表（不支持浏览，走直达安装）
+  const onSourceChange = (src: MarketSource) => {
+    setSource(src);
+    setItems([]);
+    setSearched(false);
+    if (src === 'github') void search(keyword, 'github');
+  };
+
+  const onInstall = async (fullName: string, src: MarketSource) => {
     setInstalling(fullName);
     try {
-      await dim.install(fullName);
+      await dim.install(fullName, src);
     } catch (e) {
       toast.error(`安装失败：${errText(e)}`);
     } finally {
@@ -68,20 +92,40 @@ function MarketSearchPanel({ dim }: { dim: MarketDim }) {
     }
   };
 
-  // 搜索词形如 GitHub 地址 / owner/repo 时，结果区顶部提供直接安装项
+  // Gitee 源：输入词形如 owner/repo 时展示直达安装项（详情在搜索时拉取）
+  const giteeDirect = useMemo(() => {
+    if (source !== 'gitee') return null;
+    return parseGiteeRepo(keyword);
+  }, [source, keyword]);
+
+  // GitHub 源：搜索词形如仓库地址 / owner/repo 时，结果区顶部提供直接安装项
   const directRepo = useMemo(() => {
     const kw = keyword.trim();
-    if (!kw) return null;
+    if (source !== 'github' || !kw) return null;
     const repo = parseDirectRepo(kw);
     if (!repo) return null;
     // 与搜索结果重复时不重复展示
     return items.some((it) => it.fullName.toLowerCase() === repo.toLowerCase()) ? null : repo;
-  }, [keyword, items]);
+  }, [source, keyword, items]);
 
   return (
     <div>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 12, alignItems: 'center' }}>
+        <Segmented
+          options={SOURCE_OPTIONS}
+          value={source}
+          onChange={(v) => onSourceChange(v as MarketSource)}
+        />
+        <span style={{ color: 'var(--text-tertiary, #999)', fontSize: 12, flex: 1 }}>
+          {source === 'gitee'
+            ? 'Gitee 源：输入 owner/repo 仓库地址直接安装'
+            : 'GitHub 源：按关键词搜索插件仓库'}
+        </span>
+      </div>
       <Input.Search
-        placeholder="搜索插件仓库…"
+        placeholder={
+          source === 'gitee' ? '例如：openharmony-sig/docs（owner/repo）' : '搜索插件仓库…'
+        }
         allowClear
         value={keyword}
         loading={loading}
@@ -89,11 +133,41 @@ function MarketSearchPanel({ dim }: { dim: MarketDim }) {
         autoCorrect="off"
         spellCheck={false}
         onChange={(e) => setKeyword(e.target.value)}
-        onSearch={(v) => void search(v.trim())}
+        onSearch={(v) => {
+          if (source === 'gitee') {
+            // Gitee：输入 owner/repo 即拉详情作直达安装项
+            const repo = parseGiteeRepo(v);
+            if (!repo) {
+              toast.warning('请输入 owner/repo 形式的仓库地址');
+              return;
+            }
+            setItems([]);
+            setSearched(false);
+            void search(repo, 'gitee');
+          } else {
+            void search(v.trim(), 'github');
+          }
+        }}
         style={{ marginBottom: 12 }}
       />
       <Spin spinning={loading && !searched}>
         <div className="market-list">
+          {source === 'gitee' && giteeDirect && !searched ? (
+            <div className="market-card market-direct">
+              <div className="mc-main">
+                <div className="mc-name mono">{giteeDirect}</div>
+                <div className="mc-desc">Gitee 仓库直达安装</div>
+              </div>
+              <Button
+                type="primary"
+                icon={<DownloadOutlined />}
+                loading={installing === giteeDirect}
+                onClick={() => void onInstall(giteeDirect, 'gitee')}
+              >
+                直接安装
+              </Button>
+            </div>
+          ) : null}
           {directRepo ? (
             <div className="market-card market-direct">
               <div className="mc-main">
@@ -105,19 +179,19 @@ function MarketSearchPanel({ dim }: { dim: MarketDim }) {
                 icon={<DownloadOutlined />}
                 loading={installing === directRepo}
                 disabled={dim.isInstalled(directRepo)}
-                onClick={() => void onInstall(directRepo)}
+                onClick={() => void onInstall(directRepo, 'github')}
               >
                 {dim.isInstalled(directRepo) ? '已安装' : '直接安装'}
               </Button>
             </div>
           ) : null}
           {items.length === 0 && !loading && searched ? (
-            <Empty text={dim.emptyText} />
+            <Empty text={source === 'gitee' ? '未找到该 Gitee 仓库，请检查地址' : dim.emptyText} />
           ) : (
             items.map((it) => {
               const done = dim.isInstalled(it.fullName);
               return (
-                <div className="market-card" key={it.fullName}>
+                <div className="market-card" key={`${source}:${it.fullName}`}>
                   <div className="mc-main">
                     <div className="mc-head">
                       <a
@@ -144,7 +218,7 @@ function MarketSearchPanel({ dim }: { dim: MarketDim }) {
                     icon={<DownloadOutlined />}
                     loading={installing === it.fullName}
                     disabled={done}
-                    onClick={() => void onInstall(it.fullName)}
+                    onClick={() => void onInstall(it.fullName, source)}
                   >
                     {done ? '已安装' : '安装'}
                   </Button>
@@ -166,8 +240,8 @@ export function PluginMarketView() {
   const dim = useMemo<MarketDim>(
     () => ({
       search: searchMarketplace,
-      install: async (fullName) => {
-        const dto = await installPluginFromGithub(fullName);
+      install: async (fullName, source) => {
+        const dto = await installPluginFromGithub(fullName, source);
         await reloadPlugins(true);
         toast.success(
           `已安装 ${dto.name} v${dto.version}（技能 ${dto.skillCount} · MCP ${dto.mcpCount} · 规则 ${dto.ruleCount}）`,
@@ -200,8 +274,8 @@ export function SkillMarketView() {
   const dim = useMemo<MarketDim>(
     () => ({
       search: searchSkillMarket,
-      install: async (fullName) => {
-        const list = await installSkillFromGithub(fullName);
+      install: async (fullName, source) => {
+        const list = await installSkillFromGithub(fullName, source);
         // 强制刷新技能列表，切回「已安装」立即可见（来源带「市场」Tag）
         await loadSkills(skillLoadedFor ?? project?.path ?? '', true);
         toast.success(`已安装 ${list.length} 个技能：${list.map((s) => s.name).join('、')}`);

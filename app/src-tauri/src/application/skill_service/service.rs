@@ -29,12 +29,12 @@ pub trait SkillService: Send + Sync {
     async fn save_skill(&self, cmd: SaveSkillCmd) -> Result<SkillBO, ServiceError>;
     /// 删除技能（按 scope 删文件，幂等）
     async fn delete_skill(&self, cmd: DeleteSkillCmd) -> Result<(), ServiceError>;
-    /// 技能市场搜索（GitHub topic:cyan-skill）
+    /// 技能市场搜索（GitHub topic:cyan-skill / Gitee owner-repo 直达）
     async fn search_skill_market(
         &self,
         query: SearchSkillMarketQuery,
     ) -> Result<Vec<MarketItemBO>, ServiceError>;
-    /// 从 GitHub 仓库一键安装技能到全局目录（frontmatter 注入 market 来源）
+    /// 从远端仓库一键安装技能到全局目录（Gitee/GitHub；frontmatter 注入 market 来源）
     async fn install_skill_from_github(
         &self,
         cmd: InstallSkillFromGithubCmd,
@@ -143,6 +143,24 @@ impl SkillService for SkillServiceImpl {
         &self,
         query: SearchSkillMarketQuery,
     ) -> Result<Vec<MarketItemBO>, ServiceError> {
+        // Gitee 同插件市场策略：owner/repo 直达详情，不支持关键字浏览
+        if query.source.eq_ignore_ascii_case("gitee") {
+            let kw = query.keyword.trim();
+            if kw.is_empty() {
+                return Err(ServiceError::validation(
+                    "Gitee 源暂不支持浏览推荐列表，请输入 owner/repo 直接安装，或切换回 GitHub 源",
+                ));
+            }
+            if github::validate_full_name(kw).is_err() {
+                return Err(ServiceError::validation(
+                    "Gitee 源请输入 owner/repo 形式的仓库地址",
+                ));
+            }
+            let meta = crate::infra::plugin::gitee::repo_detail(kw)
+                .await
+                .map_err(|e| ServiceError::external(format!("{e:#}")))?;
+            return Ok(vec![MarketItemBO::from(meta.item)]);
+        }
         let items = github::search_skills(&query.keyword).await?;
         Ok(items.into_iter().map(MarketItemBO::from).collect())
     }
@@ -151,9 +169,15 @@ impl SkillService for SkillServiceImpl {
         &self,
         cmd: InstallSkillFromGithubCmd,
     ) -> Result<Vec<SkillBO>, ServiceError> {
-        // 校验 owner/repo 格式（1001），网络失败/限流走 anyhow → 3000
+        // 校验 owner/repo 格式（1001）；Gitee 网络失败/限流走 anyhow → 3000
         github::validate_full_name(&cmd.full_name)?;
-        let tmp_zip = github::download_repo_zip(&cmd.full_name).await?;
+        let tmp_zip = if cmd.is_gitee() {
+            crate::infra::plugin::gitee::download_repo_zip(&cmd.full_name)
+                .await
+                .map_err(|e| ServiceError::external(format!("{e:#}")))?
+        } else {
+            github::download_repo_zip(&cmd.full_name).await?
+        };
         // 解压到临时目录（剥离 GitHub zip 顶层包裹目录）
         let tmp_dir = tempfile::tempdir()
             .map_err(|e| ServiceError::external(format!("创建临时目录失败：{e}")))?;

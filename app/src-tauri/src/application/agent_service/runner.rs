@@ -7,8 +7,8 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::domain::agent::{
-    AgentEvent, AgentRun, ApprovalDecision, CancellationToken, ChangeInfo, ChatMessage, ChatRole,
-    ChatToolCall, Checkpoint, CheckpointRepository, LlmError, LlmGateway, PermMode,
+    AgentEvent, AgentRun, ApprovalDecision, CancellationToken, ChangeInfo, ChatImage, ChatMessage,
+    ChatRole, ChatToolCall, Checkpoint, CheckpointRepository, LlmError, LlmGateway, PermMode,
     PermissionEngine, RunEventSink, RunResult, TodoItem, TokenUsage, ToolCall, ToolExecutor,
     ToolOutput, ToolOutputStatus, ToolSpec,
 };
@@ -438,7 +438,30 @@ fn history_to_chat(messages: &[Message]) -> Vec<ChatMessage> {
             .unwrap_or_default()
             .to_string();
         match m.kind {
-            MessageKind::User => out.push(ChatMessage::text(ChatRole::User, text)),
+            MessageKind::User => {
+                // 多模态：payload.images 存在时携带内嵌图片（base64 data URL 在协议层组装）
+                let images = v
+                    .get("images")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|img| {
+                                Some(ChatImage {
+                                    mime: img.get("mime")?.as_str()?.to_string(),
+                                    data: img.get("data")?.as_str()?.to_string(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push(ChatMessage {
+                    role: ChatRole::User,
+                    content: text,
+                    images,
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                });
+            }
             MessageKind::Assistant => {
                 let tool_calls = v
                     .get("toolCalls")
@@ -456,6 +479,7 @@ fn history_to_chat(messages: &[Message]) -> Vec<ChatMessage> {
                 out.push(ChatMessage {
                     role: ChatRole::Assistant,
                     content: text,
+                    images: Vec::new(),
                     tool_calls,
                     tool_call_id: None,
                 });
@@ -469,6 +493,7 @@ fn history_to_chat(messages: &[Message]) -> Vec<ChatMessage> {
                 out.push(ChatMessage {
                     role: ChatRole::Tool,
                     content: output,
+                    images: Vec::new(),
                     tool_calls: Vec::new(),
                     tool_call_id: v
                         .get("callId")
@@ -850,6 +875,7 @@ pub async fn run_loop(
         llm_messages.push(ChatMessage {
             role: ChatRole::Assistant,
             content: turn.text.clone(),
+            images: Vec::new(),
             tool_calls: turn.tool_calls.clone(),
             tool_call_id: None,
         });
@@ -915,6 +941,7 @@ pub async fn run_loop(
                     llm_messages.push(ChatMessage {
                         role: ChatRole::Tool,
                         content: output,
+                        images: Vec::new(),
                         tool_calls: Vec::new(),
                         tool_call_id: Some(call.call_id),
                     });
@@ -1160,6 +1187,7 @@ pub async fn run_loop(
             llm_messages.push(ChatMessage {
                 role: ChatRole::Tool,
                 content: llm_result,
+                images: Vec::new(),
                 tool_calls: Vec::new(),
                 tool_call_id: Some(call.call_id),
             });

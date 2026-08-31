@@ -28,11 +28,22 @@ pub struct DeletePluginCmd {
 pub struct SearchMarketplaceQuery {
     /// 关键字（空串 = 全部 topic:cyan-plugin）
     pub keyword: String,
+    /// 市场源（github / gitee；gitee 不支持网络搜索，关键字按 owner/repo 直达处理）
+    pub source: String,
 }
 
-/// 从 GitHub 仓库安装命令
+/// 从远端仓库安装命令
 #[derive(Debug, Clone)]
 pub struct InstallFromGithubCmd {
     /// 仓库全名（owner/repo）
     pub full_name: String,
+    /// 仓库源（github / gitee，缺省 github）
+    pub source: String,
+}
+
+impl InstallFromGithubCmd {
+    /// 是否走 Gitee 源（缺省/未知值都归 GitHub，保持向后兼容）
+    pub fn is_gitee(&self) -> bool {
+        self.source.eq_ignore_ascii_case("gitee")
+    }
 }

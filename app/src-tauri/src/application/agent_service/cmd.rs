@@ -1,5 +1,7 @@
 //! Agent 命令对象。
 
+use crate::domain::session::MessageImage;
+
 /// 发起 Agent 任务命令
 #[derive(Debug, Clone)]
 pub struct StartRunCmd {
@@ -7,6 +9,8 @@ pub struct StartRunCmd {
     pub session_id: i64,
     /// 任务文本
     pub text: String,
+    /// 随消息上传的图片（mime + base64 data；空 = 纯文本）
+    pub images: Vec<MessageImage>,
     /// 模型名（空串表示使用默认模型）
     pub model: String,
     /// 权限模式（ask/auto/plan）

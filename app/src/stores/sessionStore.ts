@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   ApprovalState,
   ChatNode,
+  ImageDTO,
   MessageDTO,
   SessionDTO,
   SessionSummaryDTO,
@@ -83,7 +84,21 @@ function dtoToNode(m: MessageDTO): ChatNode | null {
   const id = String(m.id);
   switch (m.kind) {
     case 'user':
-      return { id, kind: 'user', text: String(p.text ?? '') };
+      return {
+        id,
+        kind: 'user',
+        text: String(p.text ?? ''),
+        images: Array.isArray(p.images)
+          ? p.images
+              .filter(
+                (i): i is ImageDTO =>
+                  !!i &&
+                  typeof i === 'object' &&
+                  typeof (i as ImageDTO).mime === 'string' &&
+                  typeof (i as ImageDTO).data === 'string',
+              )
+          : undefined,
+      };
     case 'assistant':
       return {
         id,

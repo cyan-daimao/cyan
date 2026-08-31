@@ -11,8 +11,8 @@ use crate::domain::agent::{
 };
 
 use super::protocol::{
-    ChatChunk, ChatCompletionsReq, ErrorBody, ReqFunction, ReqMessage, ReqTool, ReqToolCall,
-    ReqToolFunction, StreamOptions,
+    ChatChunk, ChatCompletionsReq, ErrorBody, ReqContent, ReqContentPart, ReqFunction, ReqImageUrl,
+    ReqMessage, ReqTool, ReqToolCall, ReqToolFunction, StreamOptions,
 };
 
 /// 整体请求超时（含流式读取）
@@ -41,7 +41,7 @@ impl Default for OpenAiClient {
     }
 }
 
-/// domain ChatMessage → 协议消息
+/// domain ChatMessage → 协议消息（user 消息带图片时 content 转多模态 parts 数组）
 fn to_req_message(m: &ChatMessage) -> ReqMessage {
     let role = match m.role {
         ChatRole::User => "user",
@@ -49,13 +49,29 @@ fn to_req_message(m: &ChatMessage) -> ReqMessage {
         ChatRole::Tool => "tool",
         ChatRole::System => "system",
     };
+    // 纯文本：字符串 content；带图：text part + image_url parts（data URL）。
+    // tool_calls 消息文本为空时省略 content。
+    let content = if m.content.is_empty() && m.images.is_empty() && !m.tool_calls.is_empty() {
+        None
+    } else if m.images.is_empty() {
+        Some(ReqContent::Text(m.content.clone()))
+    } else {
+        let mut parts = Vec::with_capacity(m.images.len() + 1);
+        if !m.content.is_empty() {
+            parts.push(ReqContentPart::Text { text: m.content.clone() });
+        }
+        for img in &m.images {
+            parts.push(ReqContentPart::ImageUrl {
+                image_url: ReqImageUrl {
+                    url: format!("data:{};base64,{}", img.mime, img.data),
+                },
+            });
+        }
+        Some(ReqContent::Parts(parts))
+    };
     ReqMessage {
         role: role.to_string(),
-        content: if m.content.is_empty() && !m.tool_calls.is_empty() {
-            None
-        } else {
-            Some(m.content.clone())
-        },
+        content,
         tool_calls: if m.tool_calls.is_empty() {
             None
         } else {

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::agent_service::{ApproveCmd, InterruptCmd, RollbackCmd, StartRunCmd};
 use crate::domain::agent::{AgentEvent, RunResult};
+use crate::domain::session::MessageImage;
 
 /// send_task 请求
 #[derive(Debug, Deserialize)]
@@ -13,6 +14,9 @@ pub struct SendTaskRequest {
     pub session_id: i64,
     /// 任务文本
     pub text: String,
+    /// 随消息上传的图片（mime + base64 data；缺省 = 纯文本）
+    #[serde(default)]
+    pub images: Vec<ImageDTO>,
     /// 模型名（空串使用默认模型）
     pub model: String,
     /// 权限模式（ask/auto/plan）
@@ -24,11 +28,26 @@ pub struct SendTaskRequest {
     pub skip_append: bool,
 }
 
+/// 用户消息内嵌图片 DTO（mime + base64 data，不含 data: 前缀）
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageDTO {
+    /// MIME 类型（image/png、image/jpeg、image/webp、image/gif）
+    pub mime: String,
+    /// base64 编码的图片数据
+    pub data: String,
+}
+
 impl From<SendTaskRequest> for StartRunCmd {
     fn from(r: SendTaskRequest) -> Self {
         Self {
             session_id: r.session_id,
             text: r.text,
+            images: r
+                .images
+                .into_iter()
+                .map(|i| MessageImage { mime: i.mime, data: i.data })
+                .collect(),
             model: r.model,
             perm_mode: r.perm_mode,
             disabled_tools: r.disabled_tools.unwrap_or_default(),

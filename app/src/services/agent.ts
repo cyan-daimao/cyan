@@ -1,7 +1,7 @@
 import { listen } from '@tauri-apps/api/event';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { call } from './invoke';
-import type { AgentEvent, ApprovalDecision, PermMode, RuleScope } from '../types';
+import type { AgentEvent, ApprovalDecision, ImageDTO, PermMode, RuleScope } from '../types';
 
 /** Agent 运行时命令与事件订阅（参数与 src-tauri agent_command.rs / agent_dto.rs 一致） */
 
@@ -13,9 +13,11 @@ export const sendTask = (
   disabledTools: string[],
   /** true 时后端不再 append 用户消息（编辑即截断重发场景），直接启动运行 */
   skipAppend?: boolean,
+  /** 随消息上传的图片（mime + base64 data） */
+  images?: ImageDTO[],
 ) =>
   call<void>('send_task', {
-    request: { sessionId, text, model, permMode, disabledTools, skipAppend },
+    request: { sessionId, text, images: images ?? [], model, permMode, disabledTools, skipAppend },
   });
 
 export const interruptRun = (sessionId: number) =>

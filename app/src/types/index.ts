@@ -30,6 +30,25 @@ export type McpStatus = 'connected' | 'error' | 'disabled';
 export type McpTransport = 'stdio' | 'sse';
 /** 权限规则动作 */
 export type PermAction = 'allow' | 'ask' | 'deny';
+
+/** 用户消息内嵌图片（agent_dto.rs ImageDTO：mime + base64 data，不含 data: 前缀） */
+export interface ImageDTO {
+  mime: string;
+  data: string;
+}
+
+/** 前端图片附件（发送前的内存态：含预览 URL 与文件名；dataUrl 发送时剥离） */
+export interface PendingImage {
+  /** 本地预览 id */
+  id: string;
+  mime: string;
+  /** base64 数据（不含 data: 前缀），发送时随消息上传 */
+  data: string;
+  /** data URL（预览用 `data:${mime};base64,${data}`） */
+  dataUrl: string;
+  /** 原始文件名（选图来源时携带，粘贴来源为空串） */
+  name: string;
+}
 /** 项目脚手架模板（domain project.rs：empty / rust / node） */
 export type ProjectTemplate = 'empty' | 'rust' | 'node';
 
@@ -96,7 +115,7 @@ export interface SessionDTO {
 
 /** 前端渲染用消息节点（由 MessageDTO.payload / 事件流构造；id 为本地生成） */
 export type ChatNode =
-  | { id: string; kind: 'user'; text: string }
+  | { id: string; kind: 'user'; text: string; images?: ImageDTO[] }
   | { id: string; kind: 'assistant'; text: string; thinking?: string; streaming?: boolean }
   | {
       id: string;
@@ -360,7 +379,10 @@ export interface PluginDTO {
  * 插件市场（PLUGIN_DESIGN 3.2 市场 = git 仓库协议的 GitHub 搜索形态）
  * ============================================================ */
 
-/** 插件市场条目 DTO（GitHub 仓库搜索结果） */
+/** 市场仓库源：GitHub（全球） / Gitee（中国大陆可达） */
+export type MarketSource = 'github' | 'gitee';
+
+/** 插件市场条目 DTO（远端仓库检索结果，GitHub 搜索 / Gitee owner-repo 直达） */
 export interface MarketItemDTO {
   /** owner/repo */
   fullName: string;

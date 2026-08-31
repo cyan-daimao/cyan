@@ -7,15 +7,48 @@ use serde::{Deserialize, Serialize};
 pub struct ReqMessage {
     /// 角色
     pub role: String,
-    /// 文本内容（tool_calls 消息可为空）
+    /// 内容：纯文本为字符串；携带图片时为 `[{type:text},{type:image_url}]` 数组
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<ReqContent>,
     /// assistant 工具调用
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ReqToolCall>>,
     /// tool 消息对应调用 id
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+}
+
+/// 请求消息内容（OpenAI 兼容：字符串或 parts 数组二选一）
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ReqContent {
+    /// 纯文本
+    Text(String),
+    /// 多模态 parts（text / image_url 混排）
+    Parts(Vec<ReqContentPart>),
+}
+
+/// 多模态内容 part
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReqContentPart {
+    /// 文本段
+    Text {
+        /// 文本内容
+        text: String,
+    },
+    /// 图片段（data URL 或 http(s) URL）
+    ImageUrl {
+        /// 图片载体
+        image_url: ReqImageUrl,
+    },
+}
+
+/// 图片载体（data URL：`data:<mime>;base64,<data>`）
+#[derive(Debug, Serialize)]
+pub struct ReqImageUrl {
+    /// 图片 URL（data URL 编码，无 http 图片源）
+    pub url: String,
 }
 
 /// 请求侧工具调用

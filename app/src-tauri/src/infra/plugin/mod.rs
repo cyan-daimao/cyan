@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::domain::plugin::PluginManifest;
 use crate::domain::DomainError;
 
+pub mod gitee;
 pub mod github;
 
 /// MCP 声明（mcp.json 条目）

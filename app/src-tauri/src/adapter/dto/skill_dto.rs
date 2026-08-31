@@ -85,12 +85,16 @@ impl From<DeleteSkillRequest> for DeleteSkillCmd {
 pub struct SearchSkillMarketRequest {
     /// 关键字（空串 = 全部）
     pub keyword: String,
+    /// 市场源（github / gitee，缺省 github）
+    #[serde(default)]
+    pub source: String,
 }
 
 impl From<SearchSkillMarketRequest> for SearchSkillMarketQuery {
     fn from(r: SearchSkillMarketRequest) -> Self {
         Self {
             keyword: r.keyword,
+            source: r.source,
         }
     }
 }
@@ -101,12 +105,16 @@ impl From<SearchSkillMarketRequest> for SearchSkillMarketQuery {
 pub struct InstallSkillFromGithubRequest {
     /// 仓库全名（owner/repo）
     pub full_name: String,
+    /// 仓库源（github / gitee，缺省 github）
+    #[serde(default)]
+    pub source: String,
 }
 
 impl From<InstallSkillFromGithubRequest> for InstallSkillFromGithubCmd {
     fn from(r: InstallSkillFromGithubRequest) -> Self {
         Self {
             full_name: r.full_name,
+            source: r.source,
         }
     }
 }

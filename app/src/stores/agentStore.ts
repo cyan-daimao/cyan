@@ -5,6 +5,8 @@ import type {
   ApprovalState,
   ChangeView,
   ChatNode,
+  ImageDTO,
+  PendingImage,
   RuleScope,
   RunState,
   TodoDTO,
@@ -55,8 +57,12 @@ interface AgentState {
   phase: AgentPhase;
 
   /** 发送任务；返回是否已被受理（受理后输入框可清空）。
-   *  opts.skipAppend：编辑即截断重发场景，后端不再 append 用户消息，前端也不重复插入气泡 */
-  send: (text: string, opts?: { skipAppend?: boolean }) => Promise<boolean>;
+   *  opts.skipAppend：编辑即截断重发场景，后端不再 append 用户消息，前端也不重复插入气泡
+   *  opts.images：随消息上传的图片附件（发送成功后由输入区清空待传列表） */
+  send: (
+    text: string,
+    opts?: { skipAppend?: boolean; images?: PendingImage[] },
+  ) => Promise<boolean>;
   /** 中断当前运行（Esc / 停止键） */
   interrupt: () => Promise<void>;
   /** 审批决断（允许一次 / 总是允许 / 拒绝）；alwaysScope 为「总是允许」的规则作用域 */
@@ -91,7 +97,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   send: async (text, opts) => {
     const trimmed = text.trim();
     const skipAppend = opts?.skipAppend === true;
-    if (!trimmed) {
+    const pendingImages = (opts?.images ?? []).filter((img) => img.data.length > 0);
+    if (!trimmed && pendingImages.length === 0) {
       toast.warning('请输入任务描述');
       return false;
     }
@@ -123,7 +130,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       return false;
     }
     if (!skipAppend) {
-      useSessionStore.getState().pushNode({ id: newNodeId(), kind: 'user', text: trimmed });
+      useSessionStore.getState().pushNode({
+        id: newNodeId(),
+        kind: 'user',
+        text: trimmed,
+        images: pendingImages.length > 0
+          ? pendingImages.map<ImageDTO>((img) => ({ mime: img.mime, data: img.data }))
+          : undefined,
+      });
     }
     set({
       runState: 'running',
@@ -133,7 +147,15 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       runStartedAt: { ...get().runStartedAt, [sessionId]: Date.now() },
     });
     try {
-      await sendTask(sessionId, trimmed, model, cfg.permMode, cfg.disabledTools, skipAppend);
+      await sendTask(
+        sessionId,
+        trimmed,
+        model,
+        cfg.permMode,
+        cfg.disabledTools,
+        skipAppend,
+        pendingImages.map<ImageDTO>((img) => ({ mime: img.mime, data: img.data })),
+      );
       return true;
     } catch (e) {
       const { [sessionId]: _drop, ...rest } = get().sessionRuns;

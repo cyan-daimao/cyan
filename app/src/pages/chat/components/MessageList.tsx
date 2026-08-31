@@ -198,7 +198,7 @@ const MessageNode = memo(function MessageNode({ node }: MessageNodeProps) {
     if (editing) return <div className="msg-user msg-editing">{editBox}</div>;
     return (
       <div className="msg-editable msg-editable-user">
-        <UserBubble text={node.text} />
+        <UserBubble text={node.text} images={node.images} />
         {!busy ? (
           <button className="msg-edit-btn" title="编辑" onClick={startEdit}>
             <EditOutlined />

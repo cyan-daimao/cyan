@@ -12,7 +12,10 @@ pub use agent_run::{AgentRun, PendingApproval, RunState};
 pub use cancel::CancellationToken;
 pub use checkpoint::{Checkpoint, CheckpointGateway, CheckpointRepository};
 pub use event::{AgentEvent, ChangeInfo, RunEventSink, RunResult, TodoItem, TokenUsage};
-pub use llm::{AssistantTurn, ChatMessage, ChatRequest, ChatRole, ChatToolCall, LlmError, LlmGateway};
+pub use llm::{
+    AssistantTurn, ChatImage, ChatMessage, ChatRequest, ChatRole, ChatToolCall, LlmError,
+    LlmGateway,
+};
 pub use permission::{ApprovalDecision, PermDecision, PermMode, PermissionEngine};
 pub use tool::{
     is_write_tool, CheckpointPayload, ToolCall, ToolExecutor, ToolOutput, ToolOutputStatus,

@@ -28,6 +28,15 @@ pub struct ChatToolCall {
     pub arguments: String,
 }
 
+/// 内嵌图片（用户消息多模态附件；data 为 base64 编码的原始图片字节，不含 data: 前缀）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatImage {
+    /// MIME 类型（image/png、image/jpeg、image/webp、image/gif）
+    pub mime: String,
+    /// base64 编码的图片数据
+    pub data: String,
+}
+
 /// 对话消息（跨层传输结构）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessage {
@@ -35,6 +44,8 @@ pub struct ChatMessage {
     pub role: ChatRole,
     /// 文本内容
     pub content: String,
+    /// 内嵌图片（仅 user 消息携带；空 = 纯文本）
+    pub images: Vec<ChatImage>,
     /// assistant 消息的工具调用
     pub tool_calls: Vec<ChatToolCall>,
     /// tool 消息对应的调用 id
@@ -47,6 +58,7 @@ impl ChatMessage {
         Self {
             role,
             content: content.into(),
+            images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
         }

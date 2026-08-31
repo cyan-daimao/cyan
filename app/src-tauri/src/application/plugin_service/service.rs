@@ -29,12 +29,12 @@ pub trait PluginService: Send + Sync {
     async fn toggle_plugin(&self, cmd: TogglePluginCmd) -> Result<PluginBO, ServiceError>;
     /// 卸载插件（disable + 删目录 + 软删记录，幂等）
     async fn delete_plugin(&self, cmd: DeletePluginCmd) -> Result<(), ServiceError>;
-    /// 插件市场搜索（GitHub topic:cyan-plugin）
+    /// 插件市场搜索（GitHub topic:cyan-plugin / Gitee owner-repo 直达）
     async fn search_marketplace(
         &self,
         query: SearchMarketplaceQuery,
     ) -> Result<Vec<MarketItemBO>, ServiceError>;
-    /// 从 GitHub 仓库一键安装（下载 zip 后复用 zip 安装路径）
+    /// 从远端仓库一键安装（Gitee/GitHub；下载 zip 后复用 zip 安装路径）
     async fn install_plugin_from_github(
         &self,
         cmd: InstallFromGithubCmd,
@@ -375,6 +375,25 @@ impl PluginService for PluginServiceImpl {
         &self,
         query: SearchMarketplaceQuery,
     ) -> Result<Vec<MarketItemBO>, ServiceError> {
+        // Gitee 搜索接口匿名调用常被风控拦成空数组：关键字形如 owner/repo 时走直达详情，
+        // 否则明确提示（Gitee 不支持关键字搜索），不让用户干等一个必然为空的结果
+        if query.source.eq_ignore_ascii_case("gitee") {
+            let kw = query.keyword.trim();
+            if kw.is_empty() {
+                return Err(ServiceError::validation(
+                    "Gitee 源暂不支持浏览推荐列表，请输入 owner/repo 直接安装，或切换回 GitHub 源",
+                ));
+            }
+            if crate::infra::plugin::github::validate_full_name(kw).is_err() {
+                return Err(ServiceError::validation(
+                    "Gitee 源请输入 owner/repo 形式的仓库地址（如 openharmony-sig/xxx）",
+                ));
+            }
+            let meta = plugin_fs::gitee::repo_detail(kw)
+                .await
+                .map_err(|e| ServiceError::external(format!("{e:#}")))?;
+            return Ok(vec![MarketItemBO::from(meta.item)]);
+        }
         let items = plugin_fs::github::search_plugins(&query.keyword).await?;
         Ok(items.into_iter().map(MarketItemBO::from).collect())
     }
@@ -383,9 +402,15 @@ impl PluginService for PluginServiceImpl {
         &self,
         cmd: InstallFromGithubCmd,
     ) -> Result<PluginBO, ServiceError> {
-        // 校验 owner/repo 格式（1001），网络失败/限流走 anyhow → 3000
+        // 校验 owner/repo 格式（1001）；Gitee 网络失败/限流走 anyhow → 3000
         plugin_fs::github::validate_full_name(&cmd.full_name)?;
-        let tmp_zip = plugin_fs::github::download_repo_zip(&cmd.full_name).await?;
+        let tmp_zip = if cmd.is_gitee() {
+            plugin_fs::gitee::download_repo_zip(&cmd.full_name)
+                .await
+                .map_err(|e| ServiceError::external(format!("{e:#}")))?
+        } else {
+            plugin_fs::github::download_repo_zip(&cmd.full_name).await?
+        };
         // 复用 zip 安装路径；TempPath 绑定存活到安装结束
         self.install_plugin(InstallPluginCmd {
             source_path: tmp_zip.to_string_lossy().into_owned(),

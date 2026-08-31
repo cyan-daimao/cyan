@@ -798,6 +798,32 @@ pre {
   animation: msgIn 0.3s ease;
 }
 
+/* 用户消息内嵌图片（多模态上传） */
+.msg-imgs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.msg-imgs:last-child {
+  margin-bottom: 0;
+}
+
+.msg-imgs .msg-img {
+  display: block;
+  max-width: min(280px, 100%);
+  max-height: 200px;
+  border-radius: 10px;
+  object-fit: cover;
+  cursor: zoom-in;
+  box-shadow: 0 2px 8px -2px rgba(15, 23, 42, 0.25);
+}
+
+.msg-user-text {
+  white-space: pre-wrap;
+}
+
 .msg-row {
   display: flex;
   gap: 12px;
@@ -1275,6 +1301,54 @@ pre {
   align-items: center;
   gap: 8px;
   margin-top: 6px;
+}
+
+/* 待发送图片预览条（输入框内，textarea 之下） */
+.img-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.img-preview {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-sm);
+}
+
+.img-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.img-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.65);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.img-remove:hover {
+  background: rgba(244, 63, 94, 0.9);
 }
 
 .input-hint {
@@ -1921,6 +1995,10 @@ pre {
 [data-theme='dark'] .msg-user {
   background: linear-gradient(135deg, rgba(0, 179, 158, 0.28), rgba(0, 140, 160, 0.22));
   border-color: rgba(0, 179, 158, 0.32);
+}
+
+[data-theme='dark'] .img-preview {
+  border-color: var(--border);
 }
 
 /* ---- Markdown 正文 ---- */

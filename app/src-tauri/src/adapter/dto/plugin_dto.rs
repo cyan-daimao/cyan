@@ -63,12 +63,16 @@ impl From<DeletePluginRequest> for DeletePluginCmd {
 pub struct SearchMarketplaceRequest {
     /// 关键字（空串 = 全部）
     pub keyword: String,
+    /// 市场源（github / gitee，缺省 github）
+    #[serde(default)]
+    pub source: String,
 }
 
 impl From<SearchMarketplaceRequest> for SearchMarketplaceQuery {
     fn from(r: SearchMarketplaceRequest) -> Self {
         Self {
             keyword: r.keyword,
+            source: r.source,
         }
     }
 }
@@ -79,12 +83,16 @@ impl From<SearchMarketplaceRequest> for SearchMarketplaceQuery {
 pub struct InstallPluginFromGithubRequest {
     /// 仓库全名（owner/repo）
     pub full_name: String,
+    /// 仓库源（github / gitee，缺省 github）
+    #[serde(default)]
+    pub source: String,
 }
 
 impl From<InstallPluginFromGithubRequest> for InstallFromGithubCmd {
     fn from(r: InstallPluginFromGithubRequest) -> Self {
         Self {
             full_name: r.full_name,
+            source: r.source,
         }
     }
 }

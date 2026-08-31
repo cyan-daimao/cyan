@@ -16,15 +16,53 @@ import { useSessionStore } from '../../../stores/sessionStore';
 import { useSkillStore } from '../../../stores/skillStore';
 import { useProjectStore } from '../../../stores/projectStore';
 import { guardBusy, isBusy } from '../../../utils/guard';
-import { toast } from '../../../utils/feedback';
+import { confirmDanger, toast } from '../../../utils/feedback';
 import { fmtTokens } from '../../../utils/format';
 import { PermRulesModal } from '../../../components/perms/PermRulesModal';
-import type { PermMode, SkillDTO } from '../../../types';
+import type { PermMode, PendingImage, SkillDTO } from '../../../types';
 
 interface InputAreaProps {
   draft: string;
   onDraftChange: (v: string) => void;
   inputRef: RefObject<HTMLTextAreaElement>;
+}
+
+/** 图片附件上限（与后端 ServiceError 校验一致） */
+const MAX_IMAGES = 4;
+/** 单图 base64 长度上限（与后端 MessageImage::MAX_B64_LEN 一致） */
+const MAX_IMAGE_B64 = 8_000_000;
+/** 允许的图片 MIME（后端白名单子集） */
+const IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
+let pendingImgSeq = 0;
+
+/** File → PendingImage：读为 base64 并预览；读失败/超限/非法类型返回 null */
+function fileToPendingImage(file: File): Promise<PendingImage | null> {
+  return new Promise((resolve) => {
+    const mime = (file.type || '').toLowerCase() === 'image/jpg' ? 'image/jpeg' : (file.type || '').toLowerCase();
+    if (!IMAGE_MIMES.includes(mime)) {
+      resolve(null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => resolve(null);
+    reader.onload = () => {
+      const dataUrl = String(reader.result ?? '');
+      const data = dataUrl.slice(dataUrl.indexOf(',') + 1);
+      if (!data || data.length > MAX_IMAGE_B64) {
+        resolve(null);
+        return;
+      }
+      resolve({
+        id: `img${(pendingImgSeq += 1)}`,
+        mime,
+        data,
+        dataUrl,
+        name: file.name ?? '',
+      });
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 /** 输入区：权限模式胶囊 + 上下文占用条 + 圆角大输入卡 + `/` 技能补全 */
@@ -81,6 +119,53 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
   /* ---- IME 防护：记录最近一次 compositionend 时间，onKeyDown 用它放宽 Enter 判定 ---- */
   const lastComposeEndRef = useRef(0);
 
+  /* ---- 图片附件：选图 / 粘贴 / 预览 / 删除 ---- */
+  const [images, setImages] = useState<PendingImage[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  /** 批量追加图片（选图 + 拖放 + 粘贴共用）：超出张数/超限的图片跳过并提示 */
+  const addImages = async (files: File[]) => {
+    const candidates = files.filter((f) => f.type.startsWith('image/'));
+    if (candidates.length === 0) return;
+    let remaining = MAX_IMAGES - images.length;
+    if (remaining <= 0) {
+      toast.warning(`最多上传 ${MAX_IMAGES} 张图片`);
+      return;
+    }
+    const added: PendingImage[] = [];
+    for (const file of candidates) {
+      if (added.length >= remaining) {
+        toast.warning(`最多上传 ${MAX_IMAGES} 张图片，多余图片已忽略`);
+        break;
+      }
+      const img = await fileToPendingImage(file);
+      if (img === null) {
+        toast.warning(`图片不支持或超过 6MB：${file.name || '粘贴的图片'}`);
+        continue;
+      }
+      added.push(img);
+    }
+    if (added.length > 0) setImages((prev) => [...prev, ...added].slice(0, MAX_IMAGES));
+  };
+
+  const removeImage = (id: string) => {
+    setImages((prev) => prev.filter((img) => img.id !== id));
+  };
+
+  const pickImages = () => {
+    if (images.length >= MAX_IMAGES) {
+      toast.warning(`最多上传 ${MAX_IMAGES} 张图片`);
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
+  const onFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    await addImages(files);
+  };
+
   /* ---- `/` 技能补全（PLUGIN_DESIGN 2.3） ---- */
   const project = useProjectStore((s) => s.current);
   const skills = useSkillStore((s) => s.skills);
@@ -126,32 +211,36 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
 
   const suggestOpen = matches.length > 0 && !suggestClosed;
 
-  /** 选中候选：/clear 直接执行清空（confirm 确认），其余技能填入 /id 标记 */
+  /** 选中候选：/clear 直接执行清空（二次确认），其余技能填入 /id 标记 */
   const pickSkill = (s: SkillDTO) => {
     if (s.id === 'clear') {
       setSuggestClosed(true);
-      void doClear();
+      doClear();
       return;
     }
     onDraftChangeWrap(`/${s.id} `);
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
-  /** 执行清空上下文：需有激活会话；confirm 防误触 */
-  const doClear = async () => {
+  /** 执行清空上下文：需有激活会话；antd Modal 二次确认防误触（PRD 第 9 章） */
+  const doClear = () => {
     const sid = useSessionStore.getState().activeId;
     if (sid === null) {
       toast.warning('请先开始一个对话');
       return;
     }
-    if (!window.confirm('确定清空本会话的全部上下文吗？消息与工具记录将被删除且不可恢复。')) {
-      return;
-    }
-    const removed = await clearSessionInStore(sid);
-    if (removed !== null) {
-      toast.success(`已清空上下文（删除 ${removed} 条消息）`);
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
+    confirmDanger({
+      title: '清空上下文',
+      content: '将删除本会话的全部消息与工具记录，操作不可恢复。',
+      okText: '清空',
+      onOk: async () => {
+        const removed = await clearSessionInStore(sid);
+        if (removed !== null) {
+          toast.success(`已清空上下文（删除 ${removed} 条消息）`);
+          setTimeout(() => inputRef.current?.focus(), 0);
+        }
+      },
+    });
   };
 
   /** 统一的草稿更新：重置补全状态 */
@@ -176,14 +265,22 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
 
   const onSend = async () => {
     // /clear 命令：清空上下文而非发送
-    if (draft.trim() === '/clear') {
+    if (draft.trim() === '/clear' && images.length === 0) {
       onDraftChangeWrap('');
-      void doClear();
+      doClear();
+      return;
+    }
+    // 文本与图片至少其一；发图时允许空文本（后端提示词会补齐）
+    if (!draft.trim() && images.length > 0) {
+      toast.warning('请补充图片相关的任务描述');
       return;
     }
     const expanded = expandSkillRef(draft.trim());
-    const accepted = await send(expanded);
-    if (accepted) onDraftChangeWrap('');
+    const accepted = await send(expanded, { images });
+    if (accepted) {
+      onDraftChangeWrap('');
+      setImages([]);
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -226,6 +323,14 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
     if (e.key === 'Escape' && isBusy()) {
       void interrupt();
     }
+  };
+
+  /** 粘贴图片：把剪贴板中的图片文件加入待传列表（文本粘贴走默认行为） */
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addImages(files);
   };
 
   const onPermChange = (v: string | number) => {
@@ -274,7 +379,7 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
               className="icon-btn"
               title="清空本会话全部上下文"
               disabled={activeId === null || sessionBusy}
-              onClick={() => void doClear()}
+              onClick={doClear}
             >
               <ClearOutlined />
             </button>
@@ -333,6 +438,7 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
             spellCheck={false}
             onChange={(e) => onDraftChangeWrap(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             onCompositionEnd={(e) => {
               lastComposeEndRef.current = Date.now();
               // compositionend 之后再 normalize 一次，防止拼音候选上屏后残留首字母大写/多余空格
@@ -340,14 +446,42 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
               if (next !== e.currentTarget.value) onDraftChangeWrap(next);
             }}
           />
+          {/* 待发送图片预览条 */}
+          {images.length > 0 ? (
+            <div className="img-previews">
+              {images.map((img) => (
+                <div key={img.id} className="img-preview" title={img.name || '粘贴的图片'}>
+                  <img src={img.dataUrl} alt={img.name || '附件图片'} />
+                  <button
+                    className="img-remove"
+                    title="移除"
+                    onClick={() => removeImage(img.id)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="input-toolbar">
-            <button
-              className="icon-btn"
-              title="添加附件"
-              onClick={() => toast.info('附件上传：当前版本暂未实现')}
-            >
-              <PlusOutlined />
-            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              hidden
+              onChange={(e) => void onFileInputChange(e)}
+            />
+            <Tooltip title={`上传图片（最多 ${MAX_IMAGES} 张）`}>
+              <button
+                className="icon-btn"
+                title="添加图片"
+                disabled={sessionBusy}
+                onClick={pickImages}
+              >
+                <PlusOutlined />
+              </button>
+            </Tooltip>
             <span className="input-hint">Enter 发送 · Shift+Enter 换行 · Esc 中断 · / 技能</span>
             <div style={{ flex: 1 }} />
             {tokens.input > 0 || tokens.output > 0 ? (

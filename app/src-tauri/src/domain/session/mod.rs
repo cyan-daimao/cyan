@@ -5,6 +5,6 @@ pub mod repository;
 #[allow(clippy::module_inception)]
 pub mod session;
 
-pub use message::{Message, MessageKind};
+pub use message::{Message, MessageImage, MessageKind};
 pub use repository::{MessageRepository, RecycleBinRepository, SessionRepository};
 pub use session::{Session, COMPACT_THRESHOLD};

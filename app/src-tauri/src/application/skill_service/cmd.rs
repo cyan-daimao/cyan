@@ -42,11 +42,22 @@ pub struct DeleteSkillCmd {
 pub struct SearchSkillMarketQuery {
     /// 关键字（空串 = 全部 topic:cyan-skill）
     pub keyword: String,
+    /// 市场源（github / gitee）
+    pub source: String,
 }
 
-/// 从 GitHub 仓库安装技能命令
+/// 从远端仓库安装技能命令
 #[derive(Debug, Clone)]
 pub struct InstallSkillFromGithubCmd {
     /// 仓库全名（owner/repo）
     pub full_name: String,
+    /// 仓库源（github / gitee，缺省 github）
+    pub source: String,
+}
+
+impl InstallSkillFromGithubCmd {
+    /// 是否走 Gitee 源（缺省/未知值都归 GitHub，保持向后兼容）
+    pub fn is_gitee(&self) -> bool {
+        self.source.eq_ignore_ascii_case("gitee")
+    }
 }

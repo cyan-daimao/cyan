@@ -1,5 +1,5 @@
 import { call } from './invoke';
-import type { MarketItemDTO, SaveSkillRequest, SkillDTO, SkillScope } from '../types';
+import type { MarketItemDTO, MarketSource, SaveSkillRequest, SkillDTO, SkillScope } from '../types';
 
 /** 技能相关命令（PLUGIN_DESIGN 2.4，serde camelCase） */
 
@@ -13,10 +13,10 @@ export const saveSkill = (request: SaveSkillRequest) =>
 export const deleteSkill = (scope: SkillScope, fileName: string, projectPath?: string) =>
   call<void>('delete_skill', { request: { scope, fileName, projectPath } });
 
-/** 技能市场：搜索 GitHub 上的技能仓库（keyword 空串返回推荐列表） */
-export const searchSkillMarket = (keyword: string) =>
-  call<MarketItemDTO[]>('search_skill_market', { request: { keyword } });
+/** 技能市场搜索（GitHub topic:cyan-skill 搜索 / Gitee owner-repo 直达；keyword 空串时 GitHub 返回推荐列表） */
+export const searchSkillMarket = (keyword: string, source: MarketSource = 'github') =>
+  call<MarketItemDTO[]>('search_skill_market', { request: { keyword, source } });
 
-/** 从 GitHub 仓库一键安装技能，返回该仓库安装的技能列表 */
-export const installSkillFromGithub = (fullName: string) =>
-  call<SkillDTO[]>('install_skill_from_github', { request: { fullName } });
+/** 从远端仓库一键安装技能（source=gitee 走 Gitee 归档下载，缺省 GitHub），返回该仓库安装的技能列表 */
+export const installSkillFromGithub = (fullName: string, source: MarketSource = 'github') =>
+  call<SkillDTO[]>('install_skill_from_github', { request: { fullName, source } });
