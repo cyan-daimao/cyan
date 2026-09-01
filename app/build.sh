@@ -92,6 +92,9 @@ build_mac() {
 build_win_portable() {
   echo "==> [win] 交叉编译 Windows 便携版（cargo-xwin，首次需下载 Windows SDK）"
   local WIN_TARGET="x86_64-pc-windows-msvc"
+  # cargo-xwin 下载的 MSVC CRT 静态库不带 .pdb，lld-link 对每个引用打 LNK4099（无害噪音），
+  # /ignore:4099 精确静音（只影响调试预编译库的能力，不影响产物功能与运行）
+  export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=/ignore:4099"
   # 1) rust target
   local INSTALLED_TARGETS
   INSTALLED_TARGETS="$(rustup target list --installed 2>/dev/null || true)"

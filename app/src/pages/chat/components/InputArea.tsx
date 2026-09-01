@@ -34,6 +34,17 @@ const MAX_IMAGE_B64 = 8_000_000;
 /** 允许的图片 MIME（后端白名单子集） */
 const IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
+/**
+ * 是否 WebKit 引擎（Safari / macOS WKWebView）。
+ * 只有 WebKit 存在「确认候选的那次回车泄漏为普通 keydown」的问题：compositionend
+ * 先于 keydown 触发，到达时 isComposing=false、keyCode=13，会被误当成发送。
+ * Chromium 系（Windows 的 WebView2、Chrome/Edge）确认回车是 keyCode=229，
+ * 靠 isComposing/229 守卫即可拦住，不需要也不应该按时间窗吞回车。
+ */
+const IS_WEBKIT =
+  /AppleWebKit/i.test(navigator.userAgent) &&
+  !/Chrom(e|ium)|Edg|OPR/i.test(navigator.userAgent);
+
 let pendingImgSeq = 0;
 
 /** File → PendingImage：读为 base64 并预览；读失败/超限/非法类型返回 null */
@@ -116,8 +127,9 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
     null;
   const [permsOpen, setPermsOpen] = useState(false);
 
-  /* ---- IME 防护：记录最近一次 compositionend 时间，onKeyDown 用它放宽 Enter 判定 ---- */
-  const lastComposeEndRef = useRef(0);
+  /* ---- IME 防护：记录最近一次 compositionend 的时间戳（nativeEvent.timeStamp，
+     与 keydown 的时间戳同源可比）；仅用于 WebKit 的「确认回车泄漏」一次性守卫 ---- */
+  const composeEndedAtRef = useRef(-Infinity);
 
   /* ---- 图片附件：选图 / 粘贴 / 预览 / 删除 ---- */
   const [images, setImages] = useState<PendingImage[]>([]);
@@ -286,11 +298,18 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 输入法组合中（拼音候选未上屏）：按键交给 IME，不触发发送/补全/中断
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-    // 中文 IME 刚上屏的下一帧（compositionend 后的几十毫秒），WebKit 仍可能把后续
-    // 按键当成"句首"并自动大写或插入多余空格；这段时间内 Enter 只换行不发送。
-    if (Date.now() - lastComposeEndRef.current < 200 && e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      return;
+    // WebKit 特例：确认候选的那次回车在 compositionend 之后才到达（isComposing=false、
+    // keyCode=13），会被误当成发送。只把「紧跟 compositionend 的第一次按键」视为泄漏的
+    // 确认键并一次性消费（ProseMirror inOrNearComposition 同款策略）：泄漏的是回车则
+    // 阻断默认行为，其它按键仅消费守卫、正常放行；用户随后按下的回车就是真正的发送。
+    // Chromium 不走此分支——若在所有平台按时间窗吞回车，输入法上屏后立刻回车发送
+    // 会被吞掉，需要按两次（Windows 用户反馈的问题）。
+    if (IS_WEBKIT && Math.abs(e.nativeEvent.timeStamp - composeEndedAtRef.current) < 100) {
+      composeEndedAtRef.current = -Infinity;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        return;
+      }
     }
     // 技能补全打开时：上下键移动、Enter 选中、Esc 关闭（不触发发送/中断）
     if (suggestOpen) {
@@ -440,7 +459,8 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             onCompositionEnd={(e) => {
-              lastComposeEndRef.current = Date.now();
+              // 记录 compositionend 时间戳，供 onKeyDown 的 WebKit 一次性守卫使用
+              composeEndedAtRef.current = e.nativeEvent.timeStamp;
               // compositionend 之后再 normalize 一次，防止拼音候选上屏后残留首字母大写/多余空格
               const next = (e.currentTarget.value || '').replace(/^\s+|\s+$/g, '');
               if (next !== e.currentTarget.value) onDraftChangeWrap(next);

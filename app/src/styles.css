@@ -628,6 +628,14 @@ pre {
   overflow-y: auto;
 }
 
+/* 消息行容器：列向 flex——用户行整体靠右（.msg-user / .msg-editable-user 已有的
+   align-self: flex-end 在此容器中生效），助手/工具/系统行默认拉伸占满整行（与原块级布局一致） */
+.flow-item {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
 /* 相邻可见行统一 16px 间隔；隐藏/空行不贡献间隔 */
 .chat-inner > :not([hidden]):not(:empty) ~ :not([hidden]):not(:empty) {
   margin-top: 16px;
@@ -1805,6 +1813,9 @@ pre {
     box-shadow: var(--shadow);
   }
   .msg-user {
+    max-width: 92%;
+  }
+  .msg-editable-user {
     max-width: 92%;
   }
   .ctx-meter .ctx-label {

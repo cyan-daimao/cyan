@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Modal, Spin } from 'antd';
 import { CloseOutlined, FolderOpenOutlined, ReloadOutlined } from '@ant-design/icons';
+import { openPath } from '@tauri-apps/plugin-opener';
 import type { FileNodeDTO } from '../../../types';
 import { filePreview, fileTree } from '../../../services/file';
 import { errText, toast } from '../../../utils/feedback';
@@ -57,6 +58,19 @@ export function FilePanel({ projectPath, projectName, onClose, onReference }: Fi
     }
   };
 
+  const onOpenInSystem = async () => {
+    if (!projectPath) {
+      toast.warning('请先打开项目');
+      return;
+    }
+    try {
+      // 系统文件管理器打开项目根目录：macOS 访达 / Windows 资源管理器
+      await openPath(projectPath);
+    } catch (e) {
+      toast.error(`打开文件夹失败：${errText(e)}`);
+    }
+  };
+
   return (
     <aside className="file-panel">
       <div className="fp-header">
@@ -67,6 +81,14 @@ export function FilePanel({ projectPath, projectName, onClose, onReference }: Fi
           {projectName ?? '未打开'}
         </span>
         <div style={{ flex: 1 }} />
+        <button
+          className="icon-btn"
+          title={`在系统中打开（${navigator.userAgent.includes('Mac') ? '访达' : '资源管理器'}）`}
+          disabled={!projectPath}
+          onClick={() => void onOpenInSystem()}
+        >
+          <FolderOpenOutlined />
+        </button>
         <button className="icon-btn" title="刷新" disabled={loading} onClick={() => void refresh()}>
           {loading ? <Spin size="small" /> : <ReloadOutlined />}
         </button>
