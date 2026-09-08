@@ -100,15 +100,19 @@ pub async fn run_bash(
     on_output: &mut (dyn FnMut(String) + Send + '_),
 ) -> anyhow::Result<BashOutput> {
     let start = Instant::now();
-    let mut child = tokio::process::Command::new("bash")
-        .arg("-c")
+    let mut cmd = tokio::process::Command::new("bash");
+    cmd.arg("-c")
         .arg(command)
         .current_dir(root)
         .env("PATH", extended_path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
+        .kill_on_drop(true);
+    // 独立进程组：取消/超时时整组 SIGKILL（bash 管道里的孙进程如 brew 也被终止），
+    // 否则孙进程持有管道写端不死，reader 任务的 await 会永久阻塞（工具卡死在执行中）
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = cmd.spawn()?;
 
     let stdout_pipe = child
         .stdout
@@ -161,7 +165,7 @@ pub async fn run_bash(
             }
         }
         if kill_needed {
-            let _ = child.start_kill();
+            kill_tree(&mut child);
         }
         // 超时/取消：kill 后收掉缓冲里残留的 chunk 就退出（不等管道被孙进程拖住）
         if matches!(ended, Some(Ended::Timeout | Ended::Cancelled)) {
@@ -182,6 +186,11 @@ pub async fn run_bash(
     if ended.is_none() {
         let status = child.wait().await?;
         ended = Some(Ended::Done(status.code()));
+    }
+    // 取消/超时：reader 任务直接 abort——孙进程可能持有管道写端，await 会永久阻塞
+    if matches!(ended, Some(Ended::Timeout | Ended::Cancelled)) {
+        stdout_task.abort();
+        stderr_task.abort();
     }
     let _ = stdout_task.await;
     let _ = stderr_task.await;
@@ -213,9 +222,20 @@ pub async fn run_bash(
     Ok(result)
 }
 
+/// 终止子进程整棵树：unix 下子进程已独立成组（process_group(0)），
+/// 负 pid 发 SIGKILL 杀整组（含 bash 管道里的孙进程）；其它平台仅杀直接子进程
+fn kill_tree(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .status();
+    }
+    let _ = child.start_kill();
+}
+
 /// 管道读取任务：逐 chunk（≤8KB）送入通道
-fn spawn_pipe_reader(
-    mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+fn spawn_pipe_reader(    mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static,
     is_stderr: bool,
     tx: tokio::sync::mpsc::UnboundedSender<(bool, Vec<u8>)>,
 ) -> tokio::task::JoinHandle<()> {
@@ -336,6 +356,44 @@ mod tests {
             .await
             .unwrap();
         assert!(out.cancelled);
+    }
+
+    /// 取消/超时要杀死整棵进程树：孙进程（brew 这类）不死会持有管道写端，
+    /// 旧实现 reader 任务的 await 被其永久拖住（工具卡死在执行中）
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancel_kills_grandchildren() {
+        let tmp = tempfile::tempdir().unwrap();
+        let token = CancellationToken::new();
+        let t2 = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            t2.cancel();
+        });
+        let mut noop = |_: String| {};
+        // bash 管道 + 孙进程 sleep（独特标识便于 pgrep 验证）
+        let out = run_bash(
+            tmp.path(),
+            "sleep 31234 | cat",
+            Duration::from_secs(60),
+            token,
+            &mut noop,
+        )
+        .await
+        .unwrap();
+        assert!(out.cancelled);
+        // 等 OS 收尸，避免 pgrep 撞见僵尸体
+        std::thread::sleep(Duration::from_millis(100));
+        // run_bash 返回后孙进程 sleep 31234 应已被整组 SIGKILL
+        let alive = std::process::Command::new("pgrep")
+            .args(["-f", "sleep 31234"])
+            .output()
+            .unwrap();
+        assert!(
+            !alive.status.success(),
+            "孙进程应已被杀死：{}",
+            String::from_utf8_lossy(&alive.stdout)
+        );
     }
 
     #[tokio::test]
