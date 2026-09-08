@@ -18,12 +18,20 @@ const PORT_RANGE: std::ops::RangeInclusive<u16> = 18700..=18799;
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const HEALTH_INTERVAL: Duration = Duration::from_millis(500);
 
-/// 注册表条目
+/// 注册表条目：端口 + 进程状态（占位先注册、spawn 后转为 Running）
 struct SidecarEntry {
     /// 分配端口
     port: u16,
-    /// 子进程（stop 时显式 kill）
-    child: tokio::process::Child,
+    /// 进程状态：Reserving = 占位（无进程），Running = 已 spawn
+    state: SidecarState,
+}
+
+/// 条目状态：占位与运行的区分（占位无 child，stop/status 分别处理）
+enum SidecarState {
+    /// 端口已注册、进程尚未 spawn（allocate 到 spawn 完成之间）
+    Reserving,
+    /// 进程已启动（stop 时显式 kill）
+    Running(tokio::process::Child),
 }
 
 /// sidecar 管理器（实现 domain SidecarGateway 端口）
@@ -50,9 +58,11 @@ impl SidecarManager {
         }
     }
 
-    /// 分配端口：先查内存（同插件复用），再按段探测空闲；段耗尽报错
+    /// 分配端口：先查内存（同插件复用），再按段探测空闲并立即注册占位（Reserving）。
+    /// 占位在 spawn 前先行写入：杜绝并发 start 因 bind 探测窗口撞到同一端口；
+    /// spawn/健康检查失败时经 release 移除。
     fn allocate(&self, plugin: &str) -> anyhow::Result<u16> {
-        let entries = self.entries.lock().expect("sidecar 锁中毒");
+        let mut entries = self.entries.lock().expect("sidecar 锁中毒");
         if let Some(e) = entries.get(plugin) {
             return Ok(e.port);
         }
@@ -60,8 +70,15 @@ impl SidecarManager {
             if entries.values().any(|e| e.port == port) {
                 continue;
             }
-            // 探测空闲（bind 成功立即释放，spawn 由健康检查兜底竞争窗口）
+            // 探测空闲（bind 成功立即释放，作为"当前没人占"的粗筛）
             if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                entries.insert(
+                    plugin.to_string(),
+                    SidecarEntry {
+                        port,
+                        state: SidecarState::Reserving,
+                    },
+                );
                 return Ok(port);
             }
         }
@@ -70,6 +87,14 @@ impl SidecarManager {
             PORT_RANGE.start(),
             PORT_RANGE.end()
         ))
+    }
+
+    /// spawn 或健康检查失败时释放占位（幂等）
+    fn release(&self, plugin: &str) {
+        self.entries
+            .lock()
+            .expect("sidecar 锁中毒")
+            .remove(plugin);
     }
 
     /// 健康检查轮询：200 就绪；子进程提前退出立即失败
@@ -122,12 +147,13 @@ impl SidecarGateway for SidecarManager {
         command_tpl: &str,
         health_path: Option<&str>,
     ) -> anyhow::Result<SidecarInfo> {
-        // 幂等：已在运行直接返回现状
+        // 幂等：已在运行（含占位）直接返回现状；占位无 child，pid 取 0
         if let Some(e) = self.entries.lock().expect("sidecar 锁中毒").get(plugin) {
-            return Ok(SidecarInfo {
-                port: e.port,
-                pid: e.child.id().unwrap_or(0),
-            });
+            let pid = match &e.state {
+                SidecarState::Running(child) => child.id().unwrap_or(0),
+                SidecarState::Reserving => 0,
+            };
+            return Ok(SidecarInfo { port: e.port, pid });
         }
         let port = self.allocate(plugin)?;
         let cmdline = command_tpl.replace("{port}", &port.to_string());
@@ -136,26 +162,39 @@ impl SidecarGateway for SidecarManager {
         let program = parts
             .next()
             .ok_or_else(|| anyhow::anyhow!("sidecar 启动命令为空"))?;
-        let mut child = tokio::process::Command::new(program)
+        let mut child = match tokio::process::Command::new(program)
             .args(parts)
             .current_dir(plugin_dir)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
-            .spawn()?;
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                self.release(plugin);
+                return Err(e.into());
+            }
+        };
         // 健康检查（无 healthPath 则 spawn 后即就绪）
         if let Some(hp) = health_path {
             if let Err(e) = self.wait_ready(&mut child, port, hp).await {
                 let _ = child.kill().await;
+                self.release(plugin);
                 return Err(e);
             }
         }
         let pid = child.id().unwrap_or(0);
-        self.entries
+        // 占位 → Running（同一条目就地替换，不再 insert）
+        if let Some(e) = self
+            .entries
             .lock()
             .expect("sidecar 锁中毒")
-            .insert(plugin.to_string(), SidecarEntry { port, child });
+            .get_mut(plugin)
+        {
+            e.state = SidecarState::Running(child);
+        }
         tracing::info!(plugin, port, pid, "sidecar 已启动");
         Ok(SidecarInfo { port, pid })
     }
@@ -166,9 +205,12 @@ impl SidecarGateway for SidecarManager {
             .lock()
             .expect("sidecar 锁中毒")
             .remove(plugin);
-        if let Some(mut e) = entry {
-            let _ = e.child.kill().await;
-            let _ = e.child.wait().await;
+        if let Some(e) = entry {
+            // 占位无进程：Running 才需要 kill
+            if let SidecarState::Running(mut child) = e.state {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            }
             tracing::info!(plugin, port = e.port, "sidecar 已停止");
         }
     }
@@ -192,9 +234,11 @@ impl SidecarGateway for SidecarManager {
             .expect("sidecar 锁中毒")
             .drain()
             .collect();
-        for (plugin, mut e) in drained {
-            let _ = e.child.kill().await;
-            let _ = e.child.wait().await;
+        for (plugin, e) in drained {
+            if let SidecarState::Running(mut child) = e.state {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            }
             tracing::info!(plugin, "sidecar 退出回收");
         }
     }
@@ -219,11 +263,13 @@ pub(crate) mod tests {
                 format!("fake-{port}"),
                 SidecarEntry {
                     port,
-                    child: tokio::process::Command::new("sleep")
-                        .arg("0.1")
-                        .kill_on_drop(true)
-                        .spawn()
-                        .unwrap(),
+                    state: SidecarState::Running(
+                        tokio::process::Command::new("sleep")
+                            .arg("0.1")
+                            .kill_on_drop(true)
+                            .spawn()
+                            .unwrap(),
+                    ),
                 },
             );
         }

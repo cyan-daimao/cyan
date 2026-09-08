@@ -176,6 +176,26 @@ pub struct ChunkUsage {
     pub prompt_tokens: Option<i64>,
     /// 输出 token
     pub completion_tokens: Option<i64>,
+    /// 缓存命中 token（Moonshot/Kimi 风格：usage 顶层字段）
+    pub cached_tokens: Option<i64>,
+    /// 缓存命中明细（OpenAI 风格：prompt_tokens_details.cached_tokens）
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+/// prompt token 明细
+#[derive(Debug, Deserialize)]
+pub struct PromptTokensDetails {
+    /// 缓存命中 token
+    pub cached_tokens: Option<i64>,
+}
+
+impl ChunkUsage {
+    /// 缓存命中 token（兼容两种协议风格，未返回为 0）
+    pub fn cached(&self) -> i64 {
+        self.cached_tokens
+            .or(self.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens))
+            .unwrap_or(0)
+    }
 }
 
 /// 错误响应体

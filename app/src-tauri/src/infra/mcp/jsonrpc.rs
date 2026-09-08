@@ -106,27 +106,52 @@ pub(crate) fn parse_tools(result: &Value) -> Result<Vec<McpTool>, McpError> {
         .collect())
 }
 
-/// tools/call result → 文本输出（拼接 text 项；isError=true 转为 McpError::Tool）
+/// tools/call result → 文本输出（拼接 text 项；image 项落盘为本地文件并输出 markdown 链接；
+/// isError=true 转为 McpError::Tool）
+///
+/// image 落盘：MCP 图片（如 Playwright MCP 的 browser_take_screenshot）体积大且
+/// base64 不适合直出 LLM 上下文——存到 `~/.cyan/screenshots/mcp-<seq>.png`，
+/// 文本里给 markdown 链接（agent 可引用路径，前端可渲染预览）。
 pub(crate) fn parse_call_result(result: &Value) -> Result<String, McpError> {
     let is_error = result
         .get("isError")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let text = result
-        .get("content")
-        .and_then(|c| c.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|i| match i.get("type").and_then(|t| t.as_str()) {
-                    Some("text") => i.get("text").and_then(|t| t.as_str()).map(String::from),
-                    Some(other) => Some(format!("[不支持的内容类型：{other}]")),
-                    None => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default();
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(items) = result.get("content").and_then(|c| c.as_array()) {
+        for i in items {
+            match i.get("type").and_then(|t| t.as_str()) {
+                Some("text") => {
+                    if let Some(t) = i.get("text").and_then(|t| t.as_str()) {
+                        parts.push(t.to_string());
+                    }
+                }
+                Some("image") => {
+                    // image block：{type:"image", data:<base64>, mimeType:"image/png"}
+                    let data = i.get("data").and_then(|d| d.as_str()).unwrap_or("");
+                    let mime = i
+                        .get("mimeType")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("image/png");
+                    if data.is_empty() {
+                        parts.push("[空图片内容]".to_string());
+                    } else {
+                        match save_mcp_image(data, mime) {
+                            Ok(path) => {
+                                parts.push(format!("图片已保存：{path}"));
+                            }
+                            Err(e) => {
+                                parts.push(format!("[图片落盘失败：{e}]"));
+                            }
+                        }
+                    }
+                }
+                Some(other) => parts.push(format!("[不支持的内容类型：{other}]")),
+                None => {}
+            }
+        }
+    }
+    let text = parts.join("\n");
     if is_error {
         Err(McpError::Tool(if text.is_empty() {
             "工具返回错误（无详情）".into()
@@ -136,6 +161,31 @@ pub(crate) fn parse_call_result(result: &Value) -> Result<String, McpError> {
     } else {
         Ok(text)
     }
+}
+
+/// MCP image block 落盘：`~/.cyan/screenshots/mcp-<时间戳>-<序号>.<ext>`
+/// 返回保存后的绝对路径字符串
+fn save_mcp_image(data_b64: &str, mime: &str) -> Result<String, String> {
+    let ext = match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => return Err(format!("未知图片类型：{mime}")),
+    };
+    let bytes = crate::infra::browser::page::base64_decode_pub(data_b64)
+        .map_err(|e| e.to_string())?;
+    let dir = crate::infra::browser::page::screenshot_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = format!(
+        "mcp-{}-{seq}.{ext}",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    );
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// 简单 shell 分词：按空白切分，支持单/双引号包裹含空格的参数
@@ -332,8 +382,41 @@ mod tests {
         let e = parse_call_result(&err).unwrap_err();
         assert!(matches!(e, McpError::Tool(_)));
         assert!(e.to_string().contains("boom"));
-        let other = json!({"content": [{"type": "image", "data": "..."}]});
+        let other = json!({"content": [{"type": "audio", "data": "..."}]});
         assert!(parse_call_result(&other).unwrap().contains("不支持的内容类型"));
+    }
+
+    #[test]
+    fn parse_call_result_saves_image_to_disk() {
+        // 1x1 PNG 的 base64
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        let result = json!({"content": [
+            {"type": "text", "text": "截图完成"},
+            {"type": "image", "data": png, "mimeType": "image/png"}
+        ]});
+        let out = parse_call_result(&result).unwrap();
+        assert!(out.contains("截图完成"));
+        assert!(out.contains("图片已保存："), "应输出保存路径：{out}");
+        // 提取路径验证文件真实存在且是 PNG
+        let path = out
+            .split("图片已保存：")
+            .nth(1)
+            .unwrap()
+            .trim();
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(&bytes[..4], b"\x89PNG", "落盘文件应是 PNG");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn parse_call_result_image_empty_data_is_placeholder() {
+        let result = json!({"content": [{"type": "image", "data": "", "mimeType": "image/png"}]});
+        let out = parse_call_result(&result).unwrap();
+        assert!(out.contains("空图片内容"));
+        // 未知 mime → 落盘失败提示
+        let result = json!({"content": [{"type": "image", "data": "aGk=", "mimeType": "video/mp4"}]});
+        let out = parse_call_result(&result).unwrap();
+        assert!(out.contains("图片落盘失败"));
     }
 
     #[test]

@@ -18,6 +18,7 @@ const DISABLED_TOOLS_KEY = 'cyan.disabledTools';
 const LANG_KEY = 'cyan.lang';
 const THEME_COLOR_KEY = 'cyan.themeColor';
 const BG_MODE_KEY = 'cyan.bgMode';
+const BROWSER_HOME_KEY = 'cyan.browserHome';
 
 function loadPermMode(): PermMode {
   const v = localStorage.getItem(PERM_MODE_KEY);
@@ -38,6 +39,22 @@ export type Lang = 'zh' | 'en';
 
 /** 背景主题 */
 export type BgMode = 'light' | 'dark';
+
+/** 内置浏览器主页预设 key */
+export type BrowserHomeKey = 'baidu' | 'bing' | 'google' | 'quark';
+
+/** 内置浏览器主页预设（设置页可选） */
+export const BROWSER_HOMES: { key: BrowserHomeKey; name: string; url: string }[] = [
+  { key: 'baidu', name: '百度', url: 'https://www.baidu.com' },
+  { key: 'bing', name: '必应', url: 'https://www.bing.com' },
+  { key: 'google', name: '谷歌', url: 'https://www.google.com' },
+  { key: 'quark', name: '夸克', url: 'https://www.quark.cn' },
+];
+
+/** 主页 key → URL（未知 key 回落百度） */
+export function browserHomeUrl(key: BrowserHomeKey): string {
+  return BROWSER_HOMES.find((h) => h.key === key)?.url ?? BROWSER_HOMES[0].url;
+}
 
 /** 预设主题色 */
 export const THEME_COLORS = [
@@ -69,6 +86,8 @@ interface ConfigState {
   themeColor: string;
   /** 背景主题（浅色/深色） */
   bgMode: BgMode;
+  /** 内置浏览器主页（预设 key；localStorage 持久化，随 attach 下发后端） */
+  browserHome: BrowserHomeKey;
   loadingModels: boolean;
   loadingMcp: boolean;
   loadingPerms: boolean;
@@ -88,6 +107,7 @@ interface ConfigState {
   setLang: (lang: Lang) => void;
   setThemeColor: (color: string) => void;
   setBgMode: (mode: BgMode) => void;
+  setBrowserHome: (key: BrowserHomeKey) => void;
   loadAll: () => Promise<void>;
 
   /* ---- 模型 ---- */
@@ -137,6 +157,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   lang: loadJson<Lang>(LANG_KEY, 'zh'),
   themeColor: localStorage.getItem(THEME_COLOR_KEY) ?? THEME_COLORS[0].value,
   bgMode: loadJson<BgMode>(BG_MODE_KEY, 'light'),
+  browserHome: loadJson<BrowserHomeKey>(BROWSER_HOME_KEY, 'baidu'),
   loadingModels: false,
   loadingMcp: false,
   loadingPerms: false,
@@ -189,6 +210,11 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   setBgMode: (mode) => {
     localStorage.setItem(BG_MODE_KEY, JSON.stringify(mode));
     set({ bgMode: mode });
+  },
+
+  setBrowserHome: (key) => {
+    localStorage.setItem(BROWSER_HOME_KEY, JSON.stringify(key));
+    set({ browserHome: key });
   },
 
   loadAll: async () => {

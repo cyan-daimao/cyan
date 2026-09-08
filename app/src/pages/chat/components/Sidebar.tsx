@@ -8,6 +8,7 @@ import {
   DeleteOutlined,
   FolderOpenOutlined,
   FolderOutlined,
+  GlobalOutlined,
   LeftOutlined,
   PlusOutlined,
   RestOutlined,
@@ -39,6 +40,8 @@ interface SidebarProps {
   onOpenProject: () => void;
   onOpenSettings: (tab: 'models') => void;
   onOpenSkills: () => void;
+  /** 打开/关闭右侧浏览器面板 */
+  onToggleBrowser: () => void;
   onSelectSession: (id: number) => void;
   onDeleteSession: (id: number) => void;
 }
@@ -54,6 +57,7 @@ export function Sidebar({
   onOpenProject,
   onOpenSettings,
   onOpenSkills,
+  onToggleBrowser,
   onSelectSession,
   onDeleteSession,
 }: SidebarProps) {
@@ -232,6 +236,13 @@ export function Sidebar({
         </button>
         <button className="nav-item" onClick={() => onOpenSettings('models')}>
           <SettingOutlined /> 设置
+        </button>
+        <button
+          className="nav-item"
+          title="浏览器面板：与 agent 共享同一受控浏览器，实时可看可操作"
+          onClick={onToggleBrowser}
+        >
+          <GlobalOutlined /> 浏览器
         </button>
         <button className="nav-item" onClick={() => setRecycleOpen(true)}>
           <RestOutlined /> 回收站

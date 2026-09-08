@@ -198,6 +198,7 @@ impl LlmGateway for OpenAiClient {
                     turn.usage = Some(TokenUsage {
                         input: usage.prompt_tokens.unwrap_or(0),
                         output: usage.completion_tokens.unwrap_or(0),
+                        cached: usage.cached(),
                     });
                 }
                 for choice in parsed.choices {

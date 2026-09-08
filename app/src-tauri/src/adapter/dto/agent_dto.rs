@@ -152,6 +152,8 @@ pub struct TokenUsageDTO {
     pub input: i64,
     /// 输出 token
     pub output: i64,
+    /// 输入中缓存命中的 token
+    pub cached: i64,
 }
 
 /// Agent 事件 DTO（`agent:event` 载荷：type 判别 + 扁平字段）
@@ -238,8 +240,10 @@ pub enum AgentEventDTO {
         session_id: i64,
         /// 上下文占用百分比
         ctx_percent: i64,
-        /// token 统计
+        /// token 统计（会话累计消耗口径）
         tokens: TokenUsageDTO,
+        /// 当前上下文大小（最近一次调用的 prompt token）
+        last_input: i64,
     },
     /// 自动压缩完成
     Compacted {
@@ -355,13 +359,16 @@ impl From<AgentEvent> for AgentEventDTO {
                 session_id,
                 ctx_percent,
                 tokens,
+                last_input,
             } => Self::CtxUpdate {
                 session_id,
                 ctx_percent,
                 tokens: TokenUsageDTO {
                     input: tokens.input,
                     output: tokens.output,
+                    cached: tokens.cached,
                 },
+                last_input,
             },
             AgentEvent::Compacted { session_id, summary } => Self::Compacted { session_id, summary },
             AgentEvent::RunContinued { session_id, round } => Self::RunContinued { session_id, round },
@@ -391,6 +398,7 @@ impl From<AgentEvent> for AgentEventDTO {
                     usage: TokenUsageDTO {
                         input: usage.input,
                         output: usage.output,
+                        cached: usage.cached,
                     },
                 }
             }

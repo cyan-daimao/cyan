@@ -52,6 +52,8 @@ interface AgentState {
   /** 上下文占用百分比（≥80 前端警示） */
   ctxPercent: number;
   tokens: Tokens;
+  /** 当前上下文大小（最近一次调用的 prompt token） */
+  lastInput: number;
   pendingApproval: PendingApproval | null;
   /** 当前运行阶段（驱动「正在思考」loading 气泡） */
   phase: AgentPhase;
@@ -91,6 +93,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   changes: [],
   ctxPercent: 0,
   tokens: EMPTY_TOKENS,
+  lastInput: 0,
   pendingApproval: null,
   phase: null,
 
@@ -225,6 +228,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       phase: flag === 'waiting_approval' ? 'approval' : busy ? 'thinking' : null,
       ctxPercent: summary?.ctx ?? 0,
       tokens: summary?.tokens ?? EMPTY_TOKENS,
+      lastInput: summary?.tokens.lastInput ?? 0,
     });
   },
 
@@ -350,7 +354,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       }
       case 'ctx_update':
         if (!isActive) break;
-        set({ ctxPercent: evt.ctxPercent, tokens: evt.tokens });
+        set({ ctxPercent: evt.ctxPercent, tokens: evt.tokens, lastInput: evt.lastInput });
         break;
       case 'compacted':
         if (!isActive) break;
@@ -395,7 +399,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           ss.pushNode({
             id: newNodeId(),
             kind: 'system',
-            text: `任务完成 · 本次消耗 ↑ ${fmtTokens(evt.usage.input)} ↓ ${fmtTokens(evt.usage.output)} tokens`,
+            text: `任务完成 · 本次消耗 ↑ ${fmtTokens(evt.usage.input)} ↓ ${fmtTokens(evt.usage.output)}${(evt.usage.cached ?? 0) > 0 ? `（缓存命中 ${fmtTokens(evt.usage.cached ?? 0)}）` : ''} tokens`,
           });
         } else if (evt.result === 'aborted') {
           ss.pushNode({ id: newNodeId(), kind: 'system', text: '⏹ 已由用户中断' });

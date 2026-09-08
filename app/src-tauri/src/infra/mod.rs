@@ -1,5 +1,7 @@
 //! infra 层：LLM/SQLite/FS/Git/MCP/Process 技术实现。
 
+pub mod browser;
+pub mod computer;
 pub mod db;
 pub mod fs;
 pub mod git;

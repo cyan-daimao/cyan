@@ -3,12 +3,23 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use super::llm::ChatImage;
 use super::CancellationToken;
 use crate::domain::shared::ProjectPath;
 
 /// 写类工具清单（默认 Ask，plan 模式一律 Deny）
-pub const WRITE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "Bash"];
+pub const WRITE_TOOLS: &[&str] = &[
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "Bash",
+    "BrowserAction",
+    "BrowserType",
+    "ComputerAction",
+];
 /// 是否写类工具（MCP 注入工具 `mcp__*` 一律按写类对待，默认 Ask）
+/// 浏览器工具分级：导航/快照/截图/新页面是只读采集，BrowserAction/BrowserType
+/// 会真实操作页面（点击/提交）按写类审批；BrowserClose 视为只读（无副作用）
 pub fn is_write_tool(tool: &str) -> bool {
     WRITE_TOOLS.contains(&tool) || tool.starts_with("mcp__")
 }
@@ -80,6 +91,8 @@ pub struct ToolOutput {
     pub note: Option<String>,
     /// 写类工具产生的 checkpoint（Edit/Write 成功时存在）
     pub checkpoint: Option<CheckpointPayload>,
+    /// 随结果回传的图片（ComputerSnapshot 截图；runner 以 user 角色多模态注入 LLM 上下文，不落库）
+    pub images: Vec<ChatImage>,
 }
 
 impl ToolOutput {
@@ -90,6 +103,7 @@ impl ToolOutput {
             output: output.into(),
             note: None,
             checkpoint: None,
+            images: Vec::new(),
         }
     }
 
@@ -100,6 +114,7 @@ impl ToolOutput {
             output: output.into(),
             note: None,
             checkpoint: None,
+            images: Vec::new(),
         }
     }
 }

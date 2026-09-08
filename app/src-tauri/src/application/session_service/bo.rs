@@ -28,6 +28,10 @@ pub struct SessionSummaryBO {
     pub input_tokens: i64,
     /// 累计输出 token
     pub output_tokens: i64,
+    /// 当前上下文大小（最近一次调用 prompt token）
+    pub last_input: i64,
+    /// 累计缓存命中 token
+    pub cached_tokens: i64,
     /// 创建时间
     pub created_at: NaiveDateTime,
     /// 更新时间
@@ -42,6 +46,8 @@ impl From<Session> for SessionSummaryBO {
             ctx_percent: s.ctx_percent,
             input_tokens: s.input_tokens,
             output_tokens: s.output_tokens,
+            last_input: s.last_input,
+            cached_tokens: s.cached_tokens,
             created_at: s.created_at,
             updated_at: s.updated_at,
         }
@@ -90,6 +96,10 @@ pub struct SessionBO {
     pub input_tokens: i64,
     /// 累计输出 token
     pub output_tokens: i64,
+    /// 当前上下文大小（最近一次调用 prompt token）
+    pub last_input: i64,
+    /// 累计缓存命中 token
+    pub cached_tokens: i64,
     /// 消息列表（seq 升序）
     pub messages: Vec<MessageBO>,
     /// 所属项目名称（回收站展示用；未装配时为空串）
@@ -115,6 +125,8 @@ impl From<Session> for SessionBO {
             ctx_percent: s.ctx_percent,
             input_tokens: s.input_tokens,
             output_tokens: s.output_tokens,
+            last_input: s.last_input,
+            cached_tokens: s.cached_tokens,
             messages: s.messages.into_iter().map(MessageBO::from).collect(),
             project_name: String::new(),
             project_path: String::new(),
@@ -141,6 +153,10 @@ pub struct MessagePageBO {
     pub input_tokens: i64,
     /// 累计输出 token
     pub output_tokens: i64,
+    /// 当前上下文大小（最近一次调用 prompt token）
+    pub last_input: i64,
+    /// 累计缓存命中 token
+    pub cached_tokens: i64,
     /// 会话级模型偏好（None = 跟随全局默认模型）
     pub preferred_model: Option<String>,
 }

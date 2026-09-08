@@ -36,3 +36,8 @@ export const rollbackChange = (sessionId: number, changeId: number) =>
 /** 订阅 agent:event 单通道事件，返回解绑函数 */
 export const listenAgentEvents = (handler: (evt: AgentEvent) => void): Promise<UnlistenFn> =>
   listen<AgentEvent>('agent:event', (e) => handler(e.payload));
+
+/* ---- 浏览器面板（主窗口内嵌视图，路由 /browser） ---- */
+
+/** 弹出浏览器悬浮窗（独立子窗口，与主窗口面板共享同一直播流） */
+export const browserPopout = () => call<{ ok: boolean }>('browser_popout', { request: {} });

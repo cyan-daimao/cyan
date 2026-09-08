@@ -81,6 +81,7 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
   const runState = useAgentStore((s) => s.runState);
   const ctxPercent = useAgentStore((s) => s.ctxPercent);
   const tokens = useAgentStore((s) => s.tokens);
+  const lastInput = useAgentStore((s) => s.lastInput);
   const send = useAgentStore((s) => s.send);
   const interrupt = useAgentStore((s) => s.interrupt);
   const permMode = useConfigStore((s) => s.permMode);
@@ -409,7 +410,10 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
               <LoadingOutlined /> {elapsed}
             </span>
           ) : null}
-          <div className="ctx-meter" title="上下文窗口占用">
+          <div
+            className="ctx-meter"
+            title={`上下文窗口占用${lastInput > 0 ? `（当前 ${fmtTokens(lastInput)} tokens）` : ''}`}
+          >
             <span className="ctx-label">上下文</span>
             <div className={`ctx-bar${ctxPercent >= 80 ? ' warn' : ''}`}>
               <i style={{ width: `${Math.min(100, ctxPercent)}%` }} />
@@ -505,10 +509,13 @@ export function InputArea({ draft, onDraftChange, inputRef }: InputAreaProps) {
             <span className="input-hint">Enter 发送 · Shift+Enter 换行 · Esc 中断 · / 技能</span>
             <div style={{ flex: 1 }} />
             {tokens.input > 0 || tokens.output > 0 ? (
-              <span className="token-line">
-                <span>↑ {fmtTokens(tokens.input)}</span>
-                <span>↓ {fmtTokens(tokens.output)}</span>
-              </span>
+              <Tooltip title="本会话累计消耗（API 计费口径：每次调用全量 prompt 累加）；缓存命中部分计费更低">
+                <span className="token-line">
+                  <span>↑ {fmtTokens(tokens.input)}</span>
+                  <span>↓ {fmtTokens(tokens.output)}</span>
+                  {(tokens.cached ?? 0) > 0 ? <span>缓存 {fmtTokens(tokens.cached ?? 0)}</span> : null}
+                </span>
+              </Tooltip>
             ) : null}
             <Tooltip title={sessionBusy || running ? '运行中不可切换模型' : undefined}>
               <Select

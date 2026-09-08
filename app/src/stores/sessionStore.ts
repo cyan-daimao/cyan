@@ -75,6 +75,10 @@ function inferOutputType(output: string): 'code' | 'diff' {
   return output.startsWith('@@') ? 'diff' : 'code';
 }
 
+/** 判断消息页里最后一条 assistant 消息是否为「总结型」（有正文且非工具调用中间步）。
+ *  已由后端 anchor_summary 开窗取代：窗口起点即最近交付总结，无需前端补拉。
+ *  保留给 openSession 兜底判断（后端无锚点时回退尾窗，前端不再二次处理）。 */
+
 /**
  * MessageDTO → 前端渲染节点。
  * 后端 payload 已是解析后的 JSON 对象（serde_json::Value），无需再 parse。
@@ -228,9 +232,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     clearDeltaBuffer();
     set({ loadingMessages: true });
     try {
-      // 打开即只拉尾部窗口（约一屏半），更早历史由用户上滚时 loadOlder 增量加载；
+      // 首开传 anchorSummary：后端把窗口起点回退到最近交付总结（重启后首屏即见结论）；
       // ctx/token/模型偏好随分页响应一并返回，单次往返完成装配
-      const page = await sessionApi.listMessages(sessionId, undefined, MESSAGE_PAGE_SIZE);
+      const page = await sessionApi.listMessages(sessionId, undefined, MESSAGE_PAGE_SIZE, true);
       const messages = page.messages
         .map(dtoToNode)
         .filter((n): n is ChatNode => n !== null);

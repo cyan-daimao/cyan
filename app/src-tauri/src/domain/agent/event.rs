@@ -3,10 +3,12 @@
 /// token 用量统计
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TokenUsage {
-    /// 输入 token
+    /// 输入 token（provider 返回的原始 prompt_tokens，含缓存命中部分）
     pub input: i64,
     /// 输出 token
     pub output: i64,
+    /// 输入中命中上下文缓存的 token（provider 未返回时为 0；缓存部分计费通常低得多）
+    pub cached: i64,
 }
 
 /// TODO 项
@@ -140,8 +142,10 @@ pub enum AgentEvent {
         session_id: i64,
         /// 上下文占用百分比
         ctx_percent: i64,
-        /// token 统计
+        /// token 统计（会话累计消耗口径）
         tokens: TokenUsage,
+        /// 当前上下文大小（最近一次调用的 prompt token）
+        last_input: i64,
     },
     /// 自动压缩完成
     Compacted {

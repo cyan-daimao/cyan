@@ -28,10 +28,16 @@ export interface MessagePageDTO {
   preferredModel?: string | null;
 }
 
-/** 消息游标分页：beforeSeq 缺省取尾部窗口，否则取 seq < beforeSeq 的一页（升序返回） */
-export const listMessages = (sessionId: number, beforeSeq?: number, limit = 60) =>
+/** 消息游标分页：beforeSeq 缺省取窗口（anchorSummary 时起点回退到最近交付总结），
+ *  否则取 seq < beforeSeq 的一页（升序返回） */
+export const listMessages = (
+  sessionId: number,
+  beforeSeq?: number,
+  limit = 60,
+  anchorSummary = false,
+) =>
   call<MessagePageDTO>('list_messages', {
-    request: { sessionId, beforeSeq: beforeSeq ?? null, limit },
+    request: { sessionId, beforeSeq: beforeSeq ?? null, limit, anchorSummary },
   });
 
 export const createSession = (projectPath: string) =>

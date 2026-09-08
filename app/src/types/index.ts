@@ -8,6 +8,10 @@
 export interface Tokens {
   input: number;
   output: number;
+  /** 累计缓存命中 token（provider 未返回时为 0） */
+  cached?: number;
+  /** 当前上下文大小（最近一次调用 prompt token；仅 TokenStatDTO 有） */
+  lastInput?: number;
 }
 
 /** 权限模式 */
@@ -294,7 +298,7 @@ export type AgentEvent =
     }
   | { type: 'todo_update'; sessionId: number; todos: TodoDTO[] }
   | { type: 'change_add'; sessionId: number; change: ChangeDTO }
-  | { type: 'ctx_update'; sessionId: number; ctxPercent: number; tokens: Tokens }
+  | { type: 'ctx_update'; sessionId: number; ctxPercent: number; tokens: Tokens; lastInput: number }
   | { type: 'compacted'; sessionId: number; summary: string }
   /** 单窗口工具轮次跑满、任务未完成，自动续跑（round 从 1 开始） */
   | { type: 'run_continued'; sessionId: number; round: number }

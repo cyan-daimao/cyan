@@ -6,9 +6,11 @@ import {
   EditOutlined,
   FileTextOutlined,
   GlobalOutlined,
+  PictureOutlined,
   SearchOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import type { ToolStatus } from '../../types';
 import { DiffView } from './DiffView';
 
@@ -23,6 +25,13 @@ const TOOL_META: Record<string, { icon: ReactNode; cls: string }> = {
   Write: { icon: <EditOutlined />, cls: 'edit' },
   TodoWrite: { icon: <ToolOutlined />, cls: 'read' },
   WebFetch: { icon: <GlobalOutlined />, cls: 'read' },
+  BrowserNavigate: { icon: <GlobalOutlined />, cls: 'bash' },
+  BrowserSnapshot: { icon: <SearchOutlined />, cls: 'grep' },
+  BrowserAction: { icon: <ToolOutlined />, cls: 'bash' },
+  BrowserType: { icon: <EditOutlined />, cls: 'bash' },
+  BrowserScreenshot: { icon: <PictureOutlined />, cls: 'read' },
+  ComputerSnapshot: { icon: <PictureOutlined />, cls: 'grep' },
+  ComputerAction: { icon: <ToolOutlined />, cls: 'bash' },
 };
 
 function StatusTag({ status }: { status: ToolStatus }) {
@@ -73,6 +82,63 @@ function LiveTerminal({ text }: { text: string }) {
   );
 }
 
+/** 从工具输出提取图片路径（浏览器截图 / MCP image 落盘均按此格式输出） */
+function extractImagePath(output: string): string | null {
+  const m = output.match(/(?:截图已保存|图片已保存)：\s*(\S+\.(?:png|jpe?g|webp|gif))/i);
+  return m?.[1] ?? null;
+}
+
+/** 工具输出渲染上限（字符）：超出部分折叠，展开后才全量渲染。
+ *  长会话里单个工具输出可达几十 KB（如整文件 Read），全量挂 DOM 会让历史翻页极卡。 */
+const OUTPUT_RENDER_LIMIT = 4000;
+
+/** 工具输出渲染：含图片路径时渲染图片（asset:// 协议读本地文件）；
+ *  超长文本截断预览 + 手动展开完整内容（避免巨 payload 拖垮长列表） */
+function ToolOutputBody({ output, outputType }: { output: string; outputType?: 'code' | 'diff' | 'text' }) {
+  const [expanded, setExpanded] = useState(false);
+  const imgPath = extractImagePath(output);
+  if (imgPath) {
+    return (
+      <div className="tool-shot">
+        <a
+          className="tool-shot-path mono"
+          title={imgPath}
+          onClick={(e) => {
+            e.preventDefault();
+          }}
+        >
+          <PictureOutlined /> {imgPath}
+        </a>
+        <img
+          className="tool-shot-img"
+          src={convertFileSrc(imgPath)}
+          alt="工具输出图片"
+          loading="lazy"
+        />
+      </div>
+    );
+  }
+  // 超长输出：默认只渲染前 4000 字符（diff 仍整体保留但同样截断），点击展开全量
+  const overflow = output.length > OUTPUT_RENDER_LIMIT && !expanded;
+  const shown = overflow ? output.slice(0, OUTPUT_RENDER_LIMIT) : output;
+  return (
+    <>
+      {outputType === 'diff' ? (
+        <DiffView diff={shown} />
+      ) : (
+        <pre className="mono">{shown}</pre>
+      )}
+      {output.length > OUTPUT_RENDER_LIMIT ? (
+        <div className="tool-note tool-expand" onClick={() => setExpanded((v) => !v)}>
+          {overflow
+            ? `▼ 输出共 ${output.length.toLocaleString()} 字符，已截断预览——点击展开完整内容`
+            : '▲ 收起，仅显示截断预览'}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 interface ToolCardProps {
   tool: string;
   arg: string;
@@ -106,13 +172,7 @@ export function ToolCard({ tool, arg, status, outputType, output, note, liveOutp
       </div>
       <div className="tool-body">
         {live ? <LiveTerminal text={liveOutput} /> : null}
-        {!live ? (
-          outputType === 'diff' ? (
-            <DiffView diff={output ?? ''} />
-          ) : (
-            <pre className="mono">{output ?? ''}</pre>
-          )
-        ) : null}
+        {!live ? <ToolOutputBody output={output ?? ''} outputType={outputType} /> : null}
         {note ? <div className="tool-note">{note}</div> : null}
       </div>
     </div>

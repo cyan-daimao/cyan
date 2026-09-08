@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { RightOutlined } from '@ant-design/icons';
+import { listen } from '@tauri-apps/api/event';
 import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { EmptyState } from './components/EmptyState';
 import { MessageList } from './components/MessageList';
 import { InputArea } from './components/InputArea';
 import { FilePanel } from './components/FilePanel';
+import { BrowserPanel } from '../browser/BrowserPanelPage';
 import { TaskDrawer } from '../../components/drawer/TaskDrawer';
 import { ProjectModal } from '../../components/project/ProjectModal';
 import { SettingsModal } from '../../components/settings/SettingsModal';
@@ -27,6 +29,10 @@ export default function ChatPage() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 860);
   const [filePanelOpen, setFilePanelOpen] = useState(true);
+  /** 浏览器面板（右栏；与文件面板共存，窄屏时优先保浏览器） */
+  const [browserPanelOpen, setBrowserPanelOpen] = useState(false);
+  /** 浏览器面板宽度（拖拽调整；最小 280px，最大给会话区留 480px） */
+  const [browserPanelWidth, setBrowserPanelWidth] = useState(400);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -46,6 +52,32 @@ export default function ChatPage() {
   useEffect(() => {
     if (width < 860) setSidebarCollapsed(true);
   }, [width]);
+
+  /* 同步浏览器面板宽度到全局 CSS 变量：全局确认弹窗（feedback-avoid-browser）据此让位 */
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--browser-panel-w',
+      browserPanelOpen ? `${browserPanelWidth}px` : '0px',
+    );
+  }, [browserPanelOpen, browserPanelWidth]);
+
+  /* agent 浏览器工具需要可视视图时，后端发事件自动打开浏览器面板 */
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen('browser:open-panel', () => {
+      if (!disposed) setBrowserPanelOpen(true);
+    })
+      .then((u) => {
+        if (disposed) u();
+        else unlisten = u;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   /* 启动初始化：项目 → 会话 → 配置 */
   useEffect(() => {
@@ -170,6 +202,7 @@ export default function ChatPage() {
         onOpenProject={onOpenProject}
         onOpenSettings={onOpenSettings}
         onOpenSkills={() => setSkillsOpen(true)}
+        onToggleBrowser={() => setBrowserPanelOpen((v) => !v)}
         onSelectSession={onSelectSession}
         onDeleteSession={onDeleteSession}
       />
@@ -183,6 +216,8 @@ export default function ChatPage() {
           filesActive={showFilePanel}
           onToggleFiles={() => setFilePanelOpen((v) => !v)}
           onOpenDrawer={() => setDrawerOpen(true)}
+          browserActive={browserPanelOpen}
+          onToggleBrowser={() => setBrowserPanelOpen((v) => !v)}
         />
         <div className="body-wrap">
           <main className="chat-main">
@@ -201,6 +236,22 @@ export default function ChatPage() {
               projectName={project?.name ?? null}
               onClose={() => setFilePanelOpen(false)}
               onReference={onReference}
+            />
+          ) : null}
+          {browserPanelOpen ? (
+            <BrowserPanel
+              variant="panel"
+              width={browserPanelWidth}
+              onResize={setBrowserPanelWidth}
+              onClose={() => setBrowserPanelOpen(false)}
+              onPopout={() => {
+                void import('../../services/agent').then(({ browserPopout }) =>
+                  browserPopout()
+                    // 弹出成功：主面板关闭（其卸载 detach 带 main 标签，不会关掉已迁走的视图）
+                    .then(() => setBrowserPanelOpen(false))
+                    .catch(() => toast.error('弹出悬浮窗失败')),
+                );
+              }}
             />
           ) : null}
         </div>

@@ -54,6 +54,10 @@ pub struct ListMessagesRequest {
     pub before_seq: Option<i64>,
     /// 本页条数上限（1..=200，超界收敛）
     pub limit: i64,
+    /// 总结锚定：首开传 true——窗口起点回退到最近一条有正文的 assistant（交付总结），
+    /// 用户重启后首屏直接看到上次结论；向前翻页传 false（缺省）
+    #[serde(default)]
+    pub anchor_summary: bool,
 }
 
 impl From<ListMessagesRequest> for ListMessagesQuery {
@@ -62,6 +66,7 @@ impl From<ListMessagesRequest> for ListMessagesQuery {
             session_id: r.session_id,
             before_seq: r.before_seq,
             limit: r.limit,
+            anchor_summary: r.anchor_summary,
         }
     }
 }
@@ -191,6 +196,10 @@ pub struct TokenStatDTO {
     pub input: i64,
     /// 累计输出 token
     pub output: i64,
+    /// 当前上下文大小（最近一次调用 prompt token）
+    pub last_input: i64,
+    /// 累计缓存命中 token
+    pub cached: i64,
 }
 
 /// project_token_usage 请求
@@ -275,6 +284,8 @@ impl From<SessionSummaryBO> for SessionSummaryDTO {
             tokens: TokenStatDTO {
                 input: bo.input_tokens,
                 output: bo.output_tokens,
+                last_input: bo.last_input,
+                cached: bo.cached_tokens,
             },
             created_at: fmt_time(&bo.created_at),
             updated_at: fmt_time(&bo.updated_at),
@@ -338,6 +349,8 @@ impl From<MessagePageBO> for MessagePageDTO {
             tokens: TokenStatDTO {
                 input: bo.input_tokens,
                 output: bo.output_tokens,
+                last_input: bo.last_input,
+                cached: bo.cached_tokens,
             },
             preferred_model: bo.preferred_model,
         }
@@ -384,6 +397,8 @@ impl From<SessionBO> for SessionDTO {
             tokens: TokenStatDTO {
                 input: bo.input_tokens,
                 output: bo.output_tokens,
+                last_input: bo.last_input,
+                cached: bo.cached_tokens,
             },
             messages: bo.messages.into_iter().map(MessageDTO::from).collect(),
             project_name: bo.project_name,

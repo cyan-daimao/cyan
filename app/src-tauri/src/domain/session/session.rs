@@ -18,10 +18,14 @@ pub struct Session {
     pub title: String,
     /// 上下文占用百分比（0-100）
     pub ctx_percent: i64,
-    /// 累计输入 token
+    /// 累计输入 token（历史所有 LLM 调用的 prompt 总和，计费口径）
     pub input_tokens: i64,
     /// 累计输出 token
     pub output_tokens: i64,
+    /// 当前上下文大小（最近一次 LLM 调用的 prompt token 数，对话实际大小口径）
+    pub last_input: i64,
+    /// 累计缓存命中 token（provider 未返回时保持 0）
+    pub cached_tokens: i64,
     /// 会话内消息（按 seq 升序）
     pub messages: Vec<Message>,
     /// 会话级模型偏好（None = 跟随全局默认模型）
@@ -44,6 +48,8 @@ impl Session {
             ctx_percent: 0,
             input_tokens: 0,
             output_tokens: 0,
+            last_input: 0,
+            cached_tokens: 0,
             messages: Vec::new(),
             preferred_model: None,
             created_at: now,
@@ -107,9 +113,13 @@ impl Session {
     }
 
     /// 更新 token 统计与上下文占用
-    pub fn update_usage(&mut self, input: i64, output: i64, ctx_percent: i64) {
+    /// input 为当次调用的完整 prompt token：累计进 input_tokens（消耗口径），
+    /// 同时覆盖 last_input（当前上下文口径）；cached 为当次缓存命中，累计进 cached_tokens
+    pub fn update_usage(&mut self, input: i64, output: i64, cached: i64, ctx_percent: i64) {
         self.input_tokens += input;
         self.output_tokens += output;
+        self.cached_tokens += cached;
+        self.last_input = input;
         self.ctx_percent = ctx_percent.clamp(0, 100);
     }
 
@@ -119,6 +129,8 @@ impl Session {
         self.messages.clear();
         self.input_tokens = 0;
         self.output_tokens = 0;
+        self.last_input = 0;
+        self.cached_tokens = 0;
         self.ctx_percent = 0;
         self.updated_at = now;
         removed

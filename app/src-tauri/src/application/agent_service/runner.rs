@@ -39,6 +39,9 @@ fn continuation_note(max_iters: usize, round: i64) -> String {
 /// 连续重复调用中止阈值（同一调用连续 20 次；仅参数完全相同才计数，穿插不同调用即重置）
 const DUP_ABORT_AFTER: usize = 20;
 
+/// 屏幕截图合成 user 消息的内容前缀（识别并清理历史截图附件用）
+const COMPUTER_SNAPSHOT_MARKER: &str = "[ComputerSnapshot]";
+
 /// 连续重复达到该计数后，拦截升级为强提醒（给出可操作引导，给模型缓冲带）
 const DUP_WARN_AFTER: usize = 10;
 
@@ -72,6 +75,25 @@ enum DupVerdict {
     Warn,
     /// 中止运行（循环检测）
     Abort,
+}
+
+/// 重复护栏豁免：浏览器原生动作（real_click/real_key/real_type）每次执行都改变
+/// 真实页面状态（移动光标/选区/焦点），相同参数连续调用是合法操作（如连按 ↓ 移动
+/// 下拉选中项），不适用「结果与上文相同」的判定前提
+fn dup_guard_bypass(tool: &str, input: &Value) -> bool {
+    // 桌面动作每次执行都改变屏幕状态（连按方向键/连续滚动/连点），相同参数连调合法
+    if tool == "ComputerAction" {
+        return true;
+    }
+    let action = match tool {
+        "BrowserAction" => input.get("action"),
+        "BrowserType" => input.get("kind"),
+        _ => None,
+    };
+    action
+        .and_then(|a| a.as_str())
+        .map(|a| a.starts_with("real_"))
+        .unwrap_or(false)
 }
 
 /// 重复工具调用护栏：追踪最近一次调用签名与连续重复次数（内置工具与 mcp__ 统一生效）
@@ -359,6 +381,69 @@ fn builtin_tools() -> Vec<ToolSpec> {
                 &["todos"],
             ),
         },
+        ToolSpec {
+            name: "BrowserNavigate".into(),
+            description: "在应用内嵌浏览器面板中打开 URL（面板自动弹出，用户实时可见、可与你共同操作；持久数据目录保留登录态）".into(),
+            parameters: obj(
+                json!({"url": {"type": "string", "description": "目标 URL，无 scheme 自动补 https://"}}),
+                &["url"],
+            ),
+        },
+        ToolSpec {
+            name: "BrowserSnapshot".into(),
+            description: "采集内置浏览器当前页面（即用户正在浏览的页面，无需重新导航）：可交互元素带编号清单（[k] 标签/文本/链接）+ 正文摘要；后续 BrowserAction/BrowserType 用 k 定位元素。页面变化后需重新快照".into(),
+            parameters: obj(json!({}), &[]),
+        },
+        ToolSpec {
+            name: "BrowserAction".into(),
+            description: "对 BrowserSnapshot 编号为 k 的元素执行动作：click（JS 合成点击）/ scroll_into（滚动到元素可见）/ real_click（OS 级真实鼠标点击，可唤起 <select> 原生下拉等系统 UI；真实光标会移动、窗口会置前）/ real_key（真实按键，text 传键名 enter/tab/escape/backspace/left/right/up/down，k 传 \"0\"；配合 real_click 操作原生弹层：real_click 打开后用 real_key up/down 移动、enter 确认）。会真实操作页面，需审批".into(),
+            parameters: obj(
+                json!({
+                    "k": {"type": "string", "description": "BrowserSnapshot 返回的元素编号（real_key 时传 \"0\"）"},
+                    "action": {"type": "string", "enum": ["click", "scroll_into", "real_click", "real_key"], "description": "动作类型"},
+                    "text": {"type": "string", "description": "real_key 的按键名；其他动作忽略"},
+                }),
+                &["k", "action"],
+            ),
+        },
+        ToolSpec {
+            name: "BrowserType".into(),
+            description: "向 BrowserSnapshot 编号为 k 的输入框输入文本；kind=type 追加、clear_and_type 先清空再输入、press_enter 输入后回车提交、real_type（OS 级真实键盘输入：先真实点击聚焦，清空后逐字符键入，支持中文；真实光标会移动）。会真实操作页面，需审批".into(),
+            parameters: obj(
+                json!({
+                    "k": {"type": "string", "description": "BrowserSnapshot 返回的输入框编号"},
+                    "text": {"type": "string", "description": "要输入的文本"},
+                    "kind": {"type": "string", "enum": ["type", "clear_and_type", "press_enter", "real_type"], "description": "输入方式，默认 clear_and_type"},
+                }),
+                &["k", "text"],
+            ),
+        },
+        ToolSpec {
+            name: "BrowserScreenshot".into(),
+            description: "（内嵌浏览器面板基于系统 WebView，暂不支持截图；请用 BrowserSnapshot 获取页面结构）".into(),
+            parameters: obj(json!({}), &[]),
+        },
+        ToolSpec {
+            name: "ComputerSnapshot".into(),
+            description: "截取主屏画面并以图片回传（桌面 computer-use 的视觉输入，可见即可操作：任意桌面应用/系统 UI；与内嵌浏览器面板互补）。返回文本含坐标系说明：ComputerAction 的 x/y 直接传此图片坐标系内的坐标".into(),
+            parameters: obj(json!({}), &[]),
+        },
+        ToolSpec {
+            name: "ComputerAction".into(),
+            description: "在桌面执行真实鼠标/键盘动作（macOS 系统级注入，作用于当前前台应用）：click/right_click/double_click 传 x,y（ComputerSnapshot 图片坐标系）；type 传 text（逐字符输入，支持中文，输入到当前焦点处）；key 传 key（enter/tab/escape/backspace/left/right/up/down）；scroll 传 dx,dy（行单位，dy>0 查看下方内容）。真实光标会移动，需审批。动作后画面不会自动回传，需再次 ComputerSnapshot 确认结果".into(),
+            parameters: obj(
+                json!({
+                    "action": {"type": "string", "enum": ["click", "right_click", "double_click", "type", "key", "scroll"], "description": "动作类型"},
+                    "x": {"type": "number", "description": "点击横坐标（图片坐标系；click/right_click/double_click 必填）"},
+                    "y": {"type": "number", "description": "点击纵坐标（图片坐标系；click/right_click/double_click 必填）"},
+                    "text": {"type": "string", "description": "type 的输入文本"},
+                    "key": {"type": "string", "description": "key 的键名"},
+                    "dx": {"type": "integer", "description": "scroll 横向滚动量（行，>0 查看右方）"},
+                    "dy": {"type": "integer", "description": "scroll 纵向滚动量（行，>0 查看下方）"},
+                }),
+                &["action"],
+            ),
+        },
     ]
 }
 
@@ -407,6 +492,25 @@ fn system_prompt(
             prompt.push_str(&format!("\n\n项目指令（AGENTS.md，须遵守）：\n{agents}"));
         }
     }
+    // 浏览器工具使用范式：采集用快照（省 token），操作先快照再按 k 定位
+    prompt.push_str(
+        "\n\n浏览器工具使用范式（需要登录或 WebFetch 403 的站点信息采集首选）：\n\
+         你与用户共享同一个内置浏览器（应用右侧面板）：用户打开的页面你直接用 BrowserSnapshot 读取，\n\
+         你的导航/点击/输入用户实时可见，用户也可能随时接管操作——操作前先快照确认当前页面状态。\n\
+         1) BrowserNavigate 打开 URL（面板自动弹出，用户实时可见；持久数据目录保留登录态，用户已登录的站点直接用）\n\
+         2) BrowserSnapshot 采集当前页面（编号 [k]，优先用快照而非截图，省 token）\n\
+         3) 需要点击/输入时用 BrowserAction/BrowserType 按 k 操作（需审批）\n\
+         4) 内嵌视图暂不支持截图，视觉信息以 BrowserSnapshot 的结构化文本为准\n\
+         典型流程：导航 → 快照 → （如需）操作 → 再快照确认结果。",
+    );
+    // 桌面 computer-use 范式：截屏看画面 → 按图片坐标操作 → 再截屏确认
+    prompt.push_str(
+        "\n\n桌面操作能力（computer-use，可操作屏幕上任意应用）：\n\
+         1) ComputerSnapshot 截取主屏（图片回传，先看清画面再动手）\n\
+         2) ComputerAction 按图片坐标系执行点击/输入/滚动（真实光标会移动、作用于前台应用，需审批）\n\
+         3) 再次 ComputerSnapshot 确认结果，逐步推进，不要盲按\n\
+         需要 macOS 辅助功能与屏幕录制权限，且当前模型支持图片输入。",
+    );
     prompt
 }
 
@@ -532,6 +636,7 @@ fn estimate_usage(messages: &[ChatMessage], turn_text: &str) -> TokenUsage {
     TokenUsage {
         input: (chars / 4) as i64,
         output: (turn_text.len() / 4) as i64,
+        cached: 0,
     }
 }
 
@@ -818,8 +923,9 @@ pub async fn run_loop(
             .unwrap_or_else(|| estimate_usage(&llm_messages, &turn.text));
         total_usage.input += usage.input;
         total_usage.output += usage.output;
+        total_usage.cached += usage.cached;
         let ctx_pct = (usage.input * 100 / model.context_window.max(1)).clamp(0, 99);
-        session.update_usage(usage.input, usage.output, ctx_pct);
+        session.update_usage(usage.input, usage.output, usage.cached, ctx_pct);
         if let Err(e) = ctx.session_repo.update(&session).await {
             tracing::error!(error = %e, "更新会话 token 统计失败");
         }
@@ -829,7 +935,9 @@ pub async fn run_loop(
             tokens: TokenUsage {
                 input: session.input_tokens,
                 output: session.output_tokens,
+                cached: session.cached_tokens,
             },
+            last_input: session.last_input,
         });
 
         // ---- 无工具调用 → 正常收尾 ----
@@ -884,7 +992,12 @@ pub async fn run_loop(
         for tc in turn.tool_calls {
             let call = tool_call_from(tc);
             // ---- 重复调用护栏：判定在执行/审批之前（重复调用不触发审批弹窗）----
-            let verdict = dup_guard.check(&call.tool, &call.input);
+            // 原生浏览器动作每次执行都改变页面状态，相同参数连调合法，直接放行
+            let verdict = if dup_guard_bypass(&call.tool, &call.input) {
+                DupVerdict::Proceed
+            } else {
+                dup_guard.check(&call.tool, &call.input)
+            };
             let guard_streak = dup_guard.last_streak();
             match verdict {
                 DupVerdict::Abort => {
@@ -1048,6 +1161,8 @@ pub async fn run_loop(
             }
 
             // ---- 执行或回写拒绝结果 ----
+            // 工具结果携带的图片（ComputerSnapshot 截图）：随 tool 消息后以 user 多模态注入
+            let mut result_images: Vec<ChatImage> = Vec::new();
             let llm_result: String = if let Some(reason) = deny_reason {
                 ctx.sink.emit(AgentEvent::ToolStart {
                     session_id,
@@ -1086,7 +1201,7 @@ pub async fn run_loop(
                     tool: call.tool.clone(),
                     arg: call.arg.clone(),
                 });
-                let out: ToolOutput = if let Some((server, mcp_tool)) = mcp::parse_tool_name(&call.tool)
+                let mut out: ToolOutput = if let Some((server, mcp_tool)) = mcp::parse_tool_name(&call.tool)
                 {
                     // MCP 工具：路由到对应连接 tools/call；运行中断连 → 错误文本收尾（不 panic）
                     match ctx.mcp.call_tool(&server, &mcp_tool, call.input.clone()).await {
@@ -1182,6 +1297,7 @@ pub async fn run_loop(
                     .to_string(),
                 )
                 .await;
+                result_images = std::mem::take(&mut out.images);
                 out.output
             };
             llm_messages.push(ChatMessage {
@@ -1191,6 +1307,30 @@ pub async fn run_loop(
                 tool_calls: Vec::new(),
                 tool_call_id: Some(call.call_id),
             });
+
+            // 工具结果携带图片（ComputerSnapshot 截图）：以 user 角色多模态注入（tool 角色
+            // 图片各家提供商兼容性差）。只保留最新一张：历史截图消息的附件清空，控制上下文体积。
+            // 不落库——base64 不进 DB，会话重载后由模型自行重新截图
+            if !result_images.is_empty() {
+                for m in llm_messages.iter_mut() {
+                    if m.role == ChatRole::User
+                        && m.content.starts_with(COMPUTER_SNAPSHOT_MARKER)
+                        && !m.images.is_empty()
+                    {
+                        m.images.clear();
+                        m.content.push_str("（历史截图已省略）");
+                    }
+                }
+                llm_messages.push(ChatMessage {
+                    role: ChatRole::User,
+                    content: format!(
+                        "{COMPUTER_SNAPSHOT_MARKER} 当前主屏截图（坐标系说明见上一条工具结果）"
+                    ),
+                    images: result_images,
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                });
+            }
 
             if cancel.is_cancelled() {
                 result = RunResult::Aborted;
@@ -1231,7 +1371,7 @@ pub async fn run_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::agent::AssistantTurn;
+    use crate::domain::agent::{is_write_tool, AssistantTurn};
 
     #[test]
     fn system_prompt_injects_agents_md() {
@@ -1283,9 +1423,44 @@ mod tests {
     #[test]
     fn builtin_tools_include_new_tools() {
         let names: Vec<String> = builtin_tools().iter().map(|t| t.name.clone()).collect();
-        for expected in ["Grep", "Glob", "WebFetch", "MultiEdit", "Read", "Edit", "Write", "Bash", "TodoWrite"] {
+        for expected in [
+            "Grep",
+            "Glob",
+            "WebFetch",
+            "MultiEdit",
+            "Read",
+            "Edit",
+            "Write",
+            "Bash",
+            "TodoWrite",
+            "BrowserNavigate",
+            "BrowserSnapshot",
+            "BrowserAction",
+            "BrowserType",
+            "BrowserScreenshot",
+        ] {
             assert!(names.iter().any(|n| n == expected), "缺少工具：{expected}");
         }
+    }
+
+    #[test]
+    fn browser_tools_write_classification() {
+        // 采集类：只读，默认放行
+        assert!(!is_write_tool("BrowserNavigate"));
+        assert!(!is_write_tool("BrowserSnapshot"));
+        assert!(!is_write_tool("BrowserScreenshot"));
+        // 操作类：写，默认 Ask
+        assert!(is_write_tool("BrowserAction"));
+        assert!(is_write_tool("BrowserType"));
+    }
+
+    #[test]
+    fn system_prompt_includes_browser_paradigm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = ProjectPath::new(tmp.path()).unwrap();
+        let prompt = system_prompt(&root, &[], &[]);
+        assert!(prompt.contains("浏览器工具使用范式"));
+        assert!(prompt.contains("BrowserSnapshot"));
     }
 
     #[test]
@@ -1522,7 +1697,7 @@ mod tests {
             checkpoint_repo: Arc::new(CheckpointRepositoryImpl::new(pool.clone())),
             perm_repo: Arc::new(PermRuleRepositoryImpl::new(pool.clone())),
             llm,
-            executor: Arc::new(BuiltinToolExecutor),
+            executor: Arc::new(BuiltinToolExecutor::without_browser()),
             sink,
             mcp,
             plugin_repo: None,
@@ -1705,9 +1880,44 @@ mod tests {
     // ---- 重复工具调用护栏 ----
 
     #[test]
+    fn dup_guard_bypasses_native_browser_actions() {
+        // real_key 连按方向键等相同参数连续调用应豁免
+        assert!(dup_guard_bypass(
+            "BrowserAction",
+            &json!({"k": "0", "action": "real_key", "text": "down"})
+        ));
+        assert!(dup_guard_bypass(
+            "BrowserAction",
+            &json!({"k": "3", "action": "real_click"})
+        ));
+        assert!(dup_guard_bypass(
+            "BrowserType",
+            &json!({"k": "5", "text": "abc", "kind": "real_type"})
+        ));
+        // 桌面动作每次执行都改变屏幕状态（连按方向键/连续滚动），相同参数连调豁免
+        assert!(dup_guard_bypass(
+            "ComputerAction",
+            &json!({"action": "key", "key": "down"})
+        ));
+        assert!(dup_guard_bypass(
+            "ComputerAction",
+            &json!({"action": "scroll", "dy": 3})
+        ));
+        // JS 合成动作与其他工具不豁免
+        assert!(!dup_guard_bypass(
+            "BrowserAction",
+            &json!({"k": "3", "action": "click"})
+        ));
+        assert!(!dup_guard_bypass(
+            "BrowserType",
+            &json!({"k": "5", "text": "abc", "kind": "type"})
+        ));
+        assert!(!dup_guard_bypass("Read", &json!({"path": "a.rs"})));
+    }
+
+    #[test]
     fn dup_call_guard_verdicts() {
-        let mut g = DupCallGuard::default();
-        // 首次：正常执行
+        let mut g = DupCallGuard::default();        // 首次：正常执行
         assert_eq!(g.check("Read", &json!({"path": "a.rs"})), DupVerdict::Proceed);
         // 第 2 ~ (WARN-1) 次连续相同：拦截
         for _ in 0..(DUP_WARN_AFTER - 1) {

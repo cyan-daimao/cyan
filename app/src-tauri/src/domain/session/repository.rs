@@ -52,6 +52,19 @@ pub trait MessageRepository: Send + Sync {
         before_seq: Option<i64>,
         limit: i64,
     ) -> anyhow::Result<Vec<Message>>;
+    /// 定位「最后一次交付总结」的锚点 seq：倒数第一条有非空 text 正文的 assistant
+    /// 消息（工具轮次的 text 为空）。无则返回 None（回退尾窗）。
+    /// 打开会话时从锚点向前开窗，保证用户重启后直接看到上次结论（非工具卡海洋）。
+    async fn find_last_summary_seq(&self, session_id: i64) -> anyhow::Result<Option<i64>>;
+    /// 游标分页（含端点）：seq <= until_seq（None = 从尾部开始）的最近 limit 条，
+    /// 返回时反转为 seq 升序。与 list_page_by_session 的区别：until 是含端点的
+    /// 「窗口尾部」，用于总结锚定开窗（锚点必须包含在窗口内）。
+    async fn list_page_until(
+        &self,
+        session_id: i64,
+        until_seq: Option<i64>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Message>>;
     /// 插入并回填自增 id
     async fn insert(&self, message: &mut Message) -> anyhow::Result<()>;
     /// 更新消息载荷（审批 pending → 最终决断）

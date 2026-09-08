@@ -1,6 +1,7 @@
 //! 内置工具执行器（实现 domain ToolExecutor 端口）：Read/Write/Edit/MultiEdit/Bash/TodoWrite/Grep/Glob/WebFetch。
 //! Edit/Write/MultiEdit 执行前打 git checkpoint，checkpoint 信息随 ToolOutput 返回给 application 落库。
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -9,14 +10,32 @@ use crate::domain::agent::{
     CancellationToken, CheckpointPayload, ToolCall, ToolExecutor, ToolOutput,
 };
 use crate::domain::shared::ProjectPath;
+use crate::infra::browser::panel::BrowserPanelState;
 
-use super::{fs, git, process, web};
+use super::{browser::drive, computer, fs, git, process, web};
 
 /// 单 Bash 命令超时上限（10 分钟）
 const MAX_BASH_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// 内置工具执行器
-pub struct BuiltinToolExecutor;
+/// 内置工具执行器：浏览器工具驱动应用内嵌面板 WebView（agent 与用户共享同一可视视图）
+pub struct BuiltinToolExecutor {
+    /// 浏览器面板句柄（None = 浏览器能力不可用，调用返回引导错误）
+    panel: Option<(tauri::AppHandle, Arc<BrowserPanelState>)>,
+}
+
+impl BuiltinToolExecutor {
+    /// 不带浏览器的执行器（纯文件/命令场景；测试用）
+    pub fn without_browser() -> Self {
+        Self { panel: None }
+    }
+
+    /// 带浏览器面板的执行器（生产装配）
+    pub fn with_panel(app: tauri::AppHandle, panel: Arc<BrowserPanelState>) -> Self {
+        Self {
+            panel: Some((app, panel)),
+        }
+    }
+}
 
 #[async_trait]
 impl ToolExecutor for BuiltinToolExecutor {
@@ -38,8 +57,176 @@ impl ToolExecutor for BuiltinToolExecutor {
             "Glob" => exec_glob(project, call),
             "WebFetch" => exec_web_fetch(call).await,
             "TodoWrite" => ToolOutput::ok("todo list updated"),
+            "BrowserNavigate" => self.exec_browser_navigate(call).await,
+            "BrowserSnapshot" => self.exec_browser_snapshot().await,
+            "BrowserAction" => self.exec_browser_action(call).await,
+            "BrowserType" => self.exec_browser_type(call).await,
+            "BrowserScreenshot" => self.exec_browser_screenshot().await,
+            "ComputerSnapshot" => exec_computer_snapshot().await,
+            "ComputerAction" => exec_computer_action(call).await,
             other => ToolOutput::error(format!("未知工具：{other}")),
         }
+    }
+}
+
+impl BuiltinToolExecutor {
+    /// 取浏览器面板句柄；未装配时返回引导错误
+    fn panel(&self) -> Result<&(tauri::AppHandle, Arc<BrowserPanelState>), ToolOutput> {
+        self.panel.as_ref().ok_or_else(|| {
+            ToolOutput::error("浏览器能力未启用（应用装配未注入浏览器面板）")
+        })
+    }
+
+    async fn exec_browser_navigate(&self, call: &ToolCall) -> ToolOutput {
+        let (app, panel) = match self.panel() {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let url = match arg_str(call, "url") {
+            Ok(u) => u,
+            Err(e) => return ToolOutput::error(e),
+        };
+        match drive::navigate(app, panel, url).await {
+            Ok(text) => ToolOutput::ok(text),
+            Err(e) => ToolOutput::error(e),
+        }
+    }
+
+    async fn exec_browser_snapshot(&self) -> ToolOutput {
+        let (app, panel) = match self.panel() {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        match drive::snapshot(app, panel).await {
+            Ok(text) => ToolOutput::ok(text),
+            Err(e) => ToolOutput::error(e),
+        }
+    }
+
+    async fn exec_browser_action(&self, call: &ToolCall) -> ToolOutput {
+        let (app, panel) = match self.panel() {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let k = match arg_str(call, "k") {
+            Ok(v) => v,
+            Err(e) => return ToolOutput::error(e),
+        };
+        let action = match arg_str(call, "action") {
+            Ok(v) => v,
+            Err(e) => return ToolOutput::error(e),
+        };
+        // real_key 等动作用 text 传按键名；其余动作忽略
+        let text = call.input.get("text").and_then(|v| v.as_str());
+        match drive::action(app, panel, k, action, text).await {
+            Ok(text) => ToolOutput::ok(text),
+            Err(e) => ToolOutput::error(e),
+        }
+    }
+
+    async fn exec_browser_type(&self, call: &ToolCall) -> ToolOutput {
+        let (app, panel) = match self.panel() {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let k = match arg_str(call, "k") {
+            Ok(v) => v,
+            Err(e) => return ToolOutput::error(e),
+        };
+        let text = match arg_str(call, "text") {
+            Ok(v) => v,
+            Err(e) => return ToolOutput::error(e),
+        };
+        let kind = call
+            .input
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("clear_and_type");
+        match drive::action(app, panel, k, kind, Some(text)).await {
+            Ok(text) => ToolOutput::ok(text),
+            Err(e) => ToolOutput::error(e),
+        }
+    }
+
+    async fn exec_browser_screenshot(&self) -> ToolOutput {
+        // 内嵌面板基于系统 WebView（WKWebView），无截屏 API；结构化快照已覆盖信息采集
+        ToolOutput::ok("内嵌浏览器面板暂不支持截图；请改用 BrowserSnapshot 获取页面结构与正文".to_string())
+    }
+}
+
+/// 桌面截屏：截取主屏并缩放，图片随结果回传（runner 以多模态注入），文本给出坐标系说明
+async fn exec_computer_snapshot() -> ToolOutput {
+    use base64::Engine;
+    let snap = match computer::snapshot().await {
+        Ok(s) => s,
+        Err(e) => return ToolOutput::error(e),
+    };
+    // 落盘一份供用户查看/调试（与 MCP image 共用 screenshots 目录）
+    let dir = crate::infra::browser::page::screenshot_dir();
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let path = dir.join(format!("computer-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        let _ = std::fs::write(path, &snap.png);
+    }
+    let mut out = ToolOutput::ok(format!(
+        "已截取主屏（图片已随本结果回传）。坐标系：图片宽 {} 高 {}，ComputerAction 的 x/y 直接传此图片坐标系内的坐标，后端自动换算为屏幕坐标。物理像素 {}×{}，逻辑屏 {}×{}。",
+        snap.model_w, snap.model_h, snap.phys_w, snap.phys_h, snap.logical_w, snap.logical_h
+    ));
+    out.images = vec![crate::domain::agent::ChatImage {
+        mime: "image/png".into(),
+        data: base64::engine::general_purpose::STANDARD.encode(snap.png),
+    }];
+    out
+}
+
+/// 桌面操作：模型坐标系坐标 → 屏幕逻辑点 → CGEvent 注入（macOS）
+async fn exec_computer_action(call: &ToolCall) -> ToolOutput {
+    let action = match arg_str(call, "action") {
+        Ok(v) => v,
+        Err(e) => return ToolOutput::error(e),
+    };
+    // click/right_click/double_click 需要坐标；scroll 可选坐标（缺省在当前光标位置滚动）
+    let point = match action {
+        "click" | "right_click" | "double_click" => {
+            let x = call.input.get("x").and_then(|v| v.as_f64());
+            let y = call.input.get("y").and_then(|v| v.as_f64());
+            let (Some(x), Some(y)) = (x, y) else {
+                return ToolOutput::error("缺少参数：x / y（截图坐标系）");
+            };
+            match computer::model_to_screen(x, y) {
+                Ok(p) => Some(p),
+                Err(e) => return ToolOutput::error(e),
+            }
+        }
+        _ => None,
+    };
+    let result = match action {
+        "click" => computer::native_input::post_click(point.unwrap()),
+        "right_click" => computer::native_input::post_right_click(point.unwrap()),
+        "double_click" => computer::native_input::post_double_click(point.unwrap()),
+        "type" => {
+            let text = match arg_str(call, "text") {
+                Ok(v) => v,
+                Err(e) => return ToolOutput::error(e),
+            };
+            computer::native_input::post_text(text)
+        }
+        "key" => {
+            let key = match arg_str(call, "key") {
+                Ok(v) => v,
+                Err(e) => return ToolOutput::error(e),
+            };
+            computer::native_input::post_key(key)
+        }
+        "scroll" => {
+            let dx = call.input.get("dx").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let dy = call.input.get("dy").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            computer::native_input::post_scroll(dx, dy)
+        }
+        other => return ToolOutput::error(format!("未知动作：{other}（支持 click/right_click/double_click/type/key/scroll）")),
+    };
+    match result {
+        Ok(()) => ToolOutput::ok(format!("已执行 {action}。注意：动作不会自动回传画面，需再次 ComputerSnapshot 确认结果")),
+        Err(e) => ToolOutput::error(e),
     }
 }
 
@@ -101,6 +288,7 @@ fn exec_write(project: &ProjectPath, call: &ToolCall) -> ToolOutput {
             add_lines: add,
             del_lines: del,
         }),
+        images: Vec::new(),
     }
 }
 
@@ -154,6 +342,7 @@ fn exec_edit(project: &ProjectPath, call: &ToolCall) -> ToolOutput {
             add_lines: add,
             del_lines: del,
         }),
+        images: Vec::new(),
     }
 }
 
@@ -238,6 +427,7 @@ fn exec_multi_edit(project: &ProjectPath, call: &ToolCall) -> ToolOutput {
             add_lines: add,
             del_lines: del,
         }),
+        images: Vec::new(),
     }
 }
 
@@ -348,7 +538,7 @@ mod tests {
     async fn write_then_edit_then_read() {
         let tmp = tempfile::tempdir().unwrap();
         let project = ProjectPath::new(tmp.path()).unwrap();
-        let executor = BuiltinToolExecutor;
+        let executor = BuiltinToolExecutor::without_browser();
 
         let out = executor
             .execute(
@@ -383,7 +573,7 @@ mod tests {
     async fn write_escape_rejected() {
         let tmp = tempfile::tempdir().unwrap();
         let project = ProjectPath::new(tmp.path()).unwrap();
-        let out = BuiltinToolExecutor
+        let out = BuiltinToolExecutor::without_browser()
             .execute(
                 &project,
                 &call("Write", json!({"path": "../evil.txt", "content": "x"}), "../evil.txt"),
@@ -395,10 +585,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn browser_tools_without_manager_is_guided_error() {
+        // 未装配浏览器面板：浏览器工具返回引导错误（不 panic）
+        let tmp = tempfile::tempdir().unwrap();
+        let project = ProjectPath::new(tmp.path()).unwrap();
+        let out = BuiltinToolExecutor::without_browser()
+            .execute(
+                &project,
+                &call("BrowserNavigate", json!({"url": "https://example.com"}), "https://example.com"),
+                CancellationToken::new(),
+                &mut |_: String| {},
+            )
+            .await;
+        assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Error);
+        assert!(out.output.contains("浏览器能力未启用"));
+    }
+
+    #[tokio::test]
     async fn bash_runs_in_project_root() {
         let tmp = tempfile::tempdir().unwrap();
         let project = ProjectPath::new(tmp.path()).unwrap();
-        let out = BuiltinToolExecutor
+        let out = BuiltinToolExecutor::without_browser()
             .execute(
                 &project,
                 &call("Bash", json!({"command": "pwd"}), "pwd"),
@@ -441,7 +648,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "hello\nworld\n").unwrap();
         let project = ProjectPath::new(tmp.path()).unwrap();
-        let out = BuiltinToolExecutor
+        let out = BuiltinToolExecutor::without_browser()
             .execute(
                 &project,
                 &call(
@@ -462,7 +669,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(tmp.path().join("a.txt")).unwrap(), "hello\nworld\n");
 
         // 全部成功 → 一次写盘 + checkpoint
-        let out = BuiltinToolExecutor
+        let out = BuiltinToolExecutor::without_browser()
             .execute(
                 &project,
                 &call(
@@ -490,13 +697,13 @@ mod tests {
         std::fs::write(tmp.path().join("b.txt"), "hello main\n").unwrap();
         let project = ProjectPath::new(tmp.path()).unwrap();
 
-        let out = BuiltinToolExecutor
+        let out = BuiltinToolExecutor::without_browser()
             .execute(&project, &call("Glob", json!({"pattern": "**/*.rs"}), "**/*.rs"), CancellationToken::new(), &mut |_: String| {})
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Ok);
         assert_eq!(out.output, "src/a.rs");
 
-        let out = BuiltinToolExecutor
+        let out = BuiltinToolExecutor::without_browser()
             .execute(&project, &call("Grep", json!({"pattern": "main"}), "main"), CancellationToken::new(), &mut |_: String| {})
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Ok);
@@ -508,7 +715,7 @@ mod tests {
     async fn web_fetch_bad_url_is_error_output() {
         let tmp = tempfile::tempdir().unwrap();
         let project = ProjectPath::new(tmp.path()).unwrap();
-        let out = BuiltinToolExecutor
+        let out = BuiltinToolExecutor::without_browser()
             .execute(&project, &call("WebFetch", json!({"url": "not-a-url"}), "not-a-url"), CancellationToken::new(), &mut |_: String| {})
             .await;
         assert_eq!(out.status, crate::domain::agent::ToolOutputStatus::Error);

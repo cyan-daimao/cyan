@@ -22,6 +22,10 @@ pub struct SessionDO {
     pub input_tokens: i64,
     /// 累计输出 token
     pub output_tokens: i64,
+    /// 当前上下文大小（最近一次调用 prompt token）
+    pub last_input: i64,
+    /// 累计缓存命中 token
+    pub cached_tokens: i64,
     /// 会话级模型偏好（NULL = 跟随全局）
     pub preferred_model: Option<String>,
     /// 创建人
@@ -47,6 +51,8 @@ impl TryFrom<SessionDO> for Session {
             ctx_percent: d.ctx_percent,
             input_tokens: d.input_tokens,
             output_tokens: d.output_tokens,
+            last_input: d.last_input,
+            cached_tokens: d.cached_tokens,
             messages: Vec::new(),
             preferred_model: d.preferred_model,
             created_at: parse_time(&d.created_at)?,
@@ -113,7 +119,7 @@ impl SessionRepositoryImpl {
 impl SessionRepository for SessionRepositoryImpl {
     async fn find_by_id(&self, id: i64) -> anyhow::Result<Option<Session>> {
         let row = sqlx::query_as::<_, SessionDO>(
-            "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
+            "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, last_input, cached_tokens, preferred_model,
                     created_by, updated_by, created_at, updated_at, deleted_at
              FROM cyan_session WHERE id = ? AND deleted_at IS NULL",
         )
@@ -131,7 +137,7 @@ impl SessionRepository for SessionRepositoryImpl {
         let rows = match keyword {
             Some(kw) if !kw.trim().is_empty() => {
                 sqlx::query_as::<_, SessionDO>(
-                    "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
+                    "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, last_input, cached_tokens, preferred_model,
                             created_by, updated_by, created_at, updated_at, deleted_at
                      FROM cyan_session
                      WHERE project_id = ? AND deleted_at IS NULL AND title LIKE ?
@@ -144,7 +150,7 @@ impl SessionRepository for SessionRepositoryImpl {
             }
             _ => {
                 sqlx::query_as::<_, SessionDO>(
-                    "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
+                    "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, last_input, cached_tokens, preferred_model,
                             created_by, updated_by, created_at, updated_at, deleted_at
                      FROM cyan_session
                      WHERE project_id = ? AND deleted_at IS NULL
@@ -164,15 +170,17 @@ impl SessionRepository for SessionRepositoryImpl {
         session.updated_at = now;
         let id = sqlx::query(
             "INSERT INTO cyan_session
-                (project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
+                (project_id, title, ctx_percent, input_tokens, output_tokens, last_input, cached_tokens, preferred_model,
                  created_by, updated_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, 'local', 'local', ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'local', 'local', ?, ?)",
         )
         .bind(session.project_id)
         .bind(&session.title)
         .bind(session.ctx_percent)
         .bind(session.input_tokens)
         .bind(session.output_tokens)
+        .bind(session.last_input)
+        .bind(session.cached_tokens)
         .bind(&session.preferred_model)
         .bind(fmt_time(&now))
         .bind(fmt_time(&now))
@@ -186,7 +194,7 @@ impl SessionRepository for SessionRepositoryImpl {
     async fn update(&self, session: &Session) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE cyan_session
-             SET title = ?, ctx_percent = ?, input_tokens = ?, output_tokens = ?, preferred_model = ?,
+             SET title = ?, ctx_percent = ?, input_tokens = ?, output_tokens = ?, last_input = ?, cached_tokens = ?, preferred_model = ?,
                  updated_by = 'local', updated_at = ?
              WHERE id = ? AND deleted_at IS NULL",
         )
@@ -194,6 +202,8 @@ impl SessionRepository for SessionRepositoryImpl {
         .bind(session.ctx_percent)
         .bind(session.input_tokens)
         .bind(session.output_tokens)
+        .bind(session.last_input)
+        .bind(session.cached_tokens)
         .bind(&session.preferred_model)
         .bind(fmt_time(&now_local()))
         .bind(session.id)
@@ -228,7 +238,7 @@ impl SessionRepository for SessionRepositoryImpl {
 
     async fn list_deleted(&self) -> anyhow::Result<Vec<Session>> {
         let rows = sqlx::query_as::<_, SessionDO>(
-            "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, preferred_model,
+            "SELECT id, project_id, title, ctx_percent, input_tokens, output_tokens, last_input, cached_tokens, preferred_model,
                     created_by, updated_by, created_at, updated_at, deleted_at
              FROM cyan_session WHERE deleted_at IS NOT NULL
              ORDER BY deleted_at DESC",
@@ -309,7 +319,7 @@ impl SessionRepository for SessionRepositoryImpl {
 
     async fn reset_usage(&self, id: i64) -> anyhow::Result<()> {
         sqlx::query(
-            "UPDATE cyan_session SET ctx_percent = 0, input_tokens = 0, output_tokens = 0,
+            "UPDATE cyan_session SET ctx_percent = 0, input_tokens = 0, output_tokens = 0, last_input = 0, cached_tokens = 0,
                     updated_by = 'local', updated_at = ?
              WHERE id = ? AND deleted_at IS NULL",
         )
@@ -364,6 +374,70 @@ impl MessageRepository for MessageRepositoryImpl {
                             created_by, updated_by, created_at, updated_at, deleted_at
                      FROM cyan_message
                      WHERE session_id = ? AND deleted_at IS NULL AND seq < ?
+                     ORDER BY seq DESC
+                     LIMIT ?",
+                )
+                .bind(session_id)
+                .bind(cursor)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            // 无游标：直接取尾部 limit 条
+            None => {
+                sqlx::query_as::<_, MessageDO>(
+                    "SELECT id, session_id, seq, kind, payload,
+                            created_by, updated_by, created_at, updated_at, deleted_at
+                     FROM cyan_message
+                     WHERE session_id = ? AND deleted_at IS NULL
+                     ORDER BY seq DESC
+                     LIMIT ?",
+                )
+                .bind(session_id)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        let mut messages = rows
+            .into_iter()
+            .map(Message::try_from)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+
+    async fn find_last_summary_seq(&self, session_id: i64) -> anyhow::Result<Option<i64>> {
+        // 锚点：倒数第一条「有非空 text 正文」的 assistant 消息。
+        // 工具轮次的 assistant payload 是 {"text":"",...}（text 空串），
+        // 交付总结/进度说明的 text 非空——SQLite json_extract 直接区分。
+        let seq: Option<i64> = sqlx::query_scalar(
+            "SELECT seq FROM cyan_message
+             WHERE session_id = ? AND deleted_at IS NULL AND kind = 'assistant'
+               AND json_extract(payload, '$.text') != ''
+             ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(seq)
+    }
+
+    async fn list_page_until(
+        &self,
+        session_id: i64,
+        until_seq: Option<i64>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Message>> {
+        let limit = limit.clamp(1, 200);
+        let rows = match until_seq {
+            // 含端点窗口：取 seq <= until 的最近 limit 条（倒序取，正序返回）
+            Some(cursor) => {
+                sqlx::query_as::<_, MessageDO>(
+                    "SELECT id, session_id, seq, kind, payload,
+                            created_by, updated_by, created_at, updated_at, deleted_at
+                     FROM cyan_message
+                     WHERE session_id = ? AND deleted_at IS NULL AND seq <= ?
                      ORDER BY seq DESC
                      LIMIT ?",
                 )
@@ -558,10 +632,10 @@ mod tests {
         let repo = SessionRepositoryImpl::new(pool.clone());
 
         let mut s1 = Session::new(project_id, now_local());
-        s1.update_usage(100, 50, 10);
+        s1.update_usage(100, 50, 0, 10);
         repo.insert(&mut s1).await.unwrap();
         let mut s2 = Session::new(project_id, now_local());
-        s2.update_usage(200, 80, 20);
+        s2.update_usage(200, 80, 0, 20);
         repo.insert(&mut s2).await.unwrap();
 
         let (input, output, count) = repo.sum_tokens_by_project(project_id).await.unwrap();
@@ -685,7 +759,7 @@ mod tests {
         let msg_repo = MessageRepositoryImpl::new(pool.clone());
 
         let mut s = Session::new(project_id, now_local());
-        s.update_usage(1000, 500, 80);
+        s.update_usage(1000, 500, 0, 80);
         session_repo.insert(&mut s).await.unwrap();
         for i in 1..=3 {
             let mut m = Message::new(

@@ -126,10 +126,64 @@ impl SessionService for SessionServiceImpl {
             .await?
             .ok_or_else(|| ServiceError::not_found(format!("会话不存在：{}", query.session_id)))?;
         let page_size = query.limit.clamp(1, 200);
+        // 总结锚定（仅首开、无游标时生效）：窗口起点回退到「倒数第一条有正文 assistant」
+        // （交付总结），让用户重启后首屏直接看到上次结论，而非几十页工具卡海洋。
+        // 窗口构成 = [锚点前半页] + [锚点..会话末尾全部]（锚点后的近期消息量少，全量附上
+        // 保证时间线完整）；hasMore 语义仍指锚点之前是否有更早历史。
+        let effective_before = match (query.anchor_summary, query.before_seq) {
+            (true, None) => match self
+                .message_repo
+                .find_last_summary_seq(query.session_id)
+                .await?
+            {
+                Some(anchor_seq) => {
+                    // 锚点前取半页：半页 + 锚点后全部 ≤ page_size 时直接构成完整窗口
+                    let half = (page_size / 2).max(1);
+                    let head = self
+                        .message_repo
+                        .list_page_by_session(query.session_id, Some(anchor_seq), half)
+                        .await?; // seq < anchor 的最近 half 条（不含锚点）
+                    let head_count = head.len() as i64;
+                    let tail = self
+                        .message_repo
+                        .list_page_until(query.session_id, Some(anchor_seq + 10_000), page_size + 1)
+                        .await?; // 锚点起（含）到末尾
+                    let mut merged: Vec<_> = head;
+                    let head_last = merged.first().map(|m| m.seq); // head 反转后首条 = 最早 seq
+                    // tail 里剔除与 head 重叠（不会重叠，但防御 seq 边界）后拼接
+                    for m in tail {
+                        if head_last.map(|h| m.seq > h).unwrap_or(true) {
+                            merged.push(m);
+                        }
+                    }
+                    // 总量超 page_size+1 时从头部截断（保留尾部：锚点+近期消息）
+                    let overflow = merged.len() as i64 - page_size - 1;
+                    if overflow > 0 {
+                        merged.drain(..overflow as usize);
+                    }
+                    // has_more：锚点之前是否有更早历史（head 拉满半页即视为还有）
+                    let has_more = head_count >= half;
+                    let oldest_seq = merged.first().map(|m| m.seq);
+                    return Ok(MessagePageBO {
+                        messages: merged.into_iter().map(MessageBO::from).collect(),
+                        has_more,
+                        oldest_seq,
+                        ctx_percent: session.ctx_percent,
+                        input_tokens: session.input_tokens,
+                        output_tokens: session.output_tokens,
+                        last_input: session.last_input,
+                        cached_tokens: session.cached_tokens,
+                        preferred_model: session.preferred_model,
+                    });
+                }
+                None => None, // 无 assistant 正文：回退尾窗
+            },
+            _ => query.before_seq,
+        };
         // 多取一条用于探测 has_more，不落库
         let mut messages = self
             .message_repo
-            .list_page_by_session(query.session_id, query.before_seq, page_size + 1)
+            .list_page_until(query.session_id, effective_before, page_size + 1)
             .await?;
         let has_more = messages.len() as i64 > page_size;
         if has_more {
@@ -143,6 +197,8 @@ impl SessionService for SessionServiceImpl {
             ctx_percent: session.ctx_percent,
             input_tokens: session.input_tokens,
             output_tokens: session.output_tokens,
+            last_input: session.last_input,
+            cached_tokens: session.cached_tokens,
             preferred_model: session.preferred_model,
         })
     }

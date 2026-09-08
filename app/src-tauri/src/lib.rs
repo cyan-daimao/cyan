@@ -11,8 +11,8 @@ use std::sync::Arc;
 use tauri::Manager;
 
 use adapter::command::{
-    agent_command, config_command, file_command, plugin_command, project_command, recycle_command,
-    session_command, skill_command,
+    agent_command, browser_command, config_command, file_command, plugin_command, project_command,
+    recycle_command, session_command, skill_command,
 };
 use adapter::event::TauriEventSink;
 use application::agent_service::{AgentService, AgentServiceImpl};
@@ -39,6 +39,8 @@ use infra::git::GitCheckpointGateway;
 use infra::llm::OpenAiClient;
 use infra::tools::BuiltinToolExecutor;
 
+/// 受控浏览器管理器（App 生命周期共享；runner 工具执行与退出回收共用）
+
 /// 初始化 tracing：按天滚动写 `~/.cyan/logs/cyan.log.YYYY-MM-DD`
 fn init_tracing() {
     let log_dir = infra::db::datasource::cyan_home()
@@ -64,6 +66,10 @@ pub fn run() {
     // sidecar 管理器：setup 注入插件服务，退出钩子回收全部子进程
     let sidecar_manager = Arc::new(infra::sidecar::SidecarManager::new());
     let sidecar_for_setup = sidecar_manager.clone();
+    // 浏览器面板（主窗口内嵌子 WebView）：attach/detach 状态；agent 浏览器工具共享同一视图
+    let panel_state = Arc::new(infra::browser::panel::BrowserPanelState::new());
+    let panel_for_setup = panel_state.clone();
+    let panel_for_executor = panel_state.clone();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -91,7 +97,10 @@ pub fn run() {
 
             // infra → 端口实现
             let llm: Arc<dyn LlmGateway> = Arc::new(OpenAiClient::new());
-            let executor: Arc<dyn ToolExecutor> = Arc::new(BuiltinToolExecutor);
+            let executor: Arc<dyn ToolExecutor> = Arc::new(BuiltinToolExecutor::with_panel(
+                app.handle().clone(),
+                panel_for_executor.clone(),
+            ));
             let checkpoint_gateway: Arc<dyn CheckpointGateway> = Arc::new(GitCheckpointGateway);
             let sink: Arc<dyn RunEventSink> =
                 Arc::new(TauriEventSink::new(app.handle().clone()));
@@ -176,6 +185,8 @@ pub fn run() {
             app.manage(skill_service);
             app.manage(recycle_service);
             app.manage(agent_service);
+            // 浏览器面板状态：前端命令与 agent 工具共享（attach/detach/导航/eval）
+            app.manage(panel_for_setup);
             tracing::info!("cyan 初始化完成");
             Ok(())
         })
@@ -240,14 +251,32 @@ pub fn run() {
             plugin_command::delete_plugin,
             plugin_command::search_marketplace,
             plugin_command::install_plugin_from_github,
+            // 浏览器面板（主窗口内嵌子 WebView：原生渲染零投屏）
+            browser_command::browser_attach,
+            browser_command::browser_detach,
+            browser_command::browser_popout,
+            browser_command::browser_navigate,
+            browser_command::browser_eval,
+            browser_command::browser_current,
+            browser_command::browser_panel_status,
+            browser_command::__test_click,
+            browser_command::__test_probe,
         ]);
     let app = builder
         .build(tauri::generate_context!())
         .expect("error while building cyan application");
-    // App 退出回收：停掉全部 sidecar 子进程（kill_on_drop 之外的显式清理）
-    app.run(move |_handle, event| {
+    // App 退出回收：停掉全部 sidecar 子进程（kill_on_drop 之外的显式清理）+ 卸载浏览器面板视图
+    let panel_for_exit = panel_state.clone();
+    let sidecar_for_exit = sidecar_manager.clone();
+    app.run(move |handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } = event {
-            tauri::async_runtime::block_on(sidecar_manager.stop_all());
+            let panel = panel_for_exit.clone();
+            let sidecar = sidecar_for_exit.clone();
+            let app_handle = handle.clone();
+            tauri::async_runtime::block_on(async move {
+                sidecar.stop_all().await;
+                crate::infra::browser::panel::detach(&app_handle, &panel, None).await;
+            });
         }
     });
 }

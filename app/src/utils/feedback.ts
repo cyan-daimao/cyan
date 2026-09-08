@@ -38,6 +38,8 @@ export function confirmDanger(opts: {
   modalApi?.confirm({
     title: opts.title,
     content: opts.content,
+    // 右侧浏览器面板是原生 webview（层级高于 DOM），弹窗水平居中时需让出面板宽度
+    wrapClassName: 'feedback-avoid-browser',
     okText: opts.okText ?? '确认',
     cancelText: '取消',
     okButtonProps: { danger: true },

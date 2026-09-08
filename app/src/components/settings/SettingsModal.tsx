@@ -2,9 +2,10 @@ import { Modal, Tabs } from 'antd';
 import { ModelsTab } from './ModelsTab';
 import { PermsTab } from './PermsTab';
 import { ThemeTab } from './ThemeTab';
+import { BrowserTab } from './BrowserTab';
 import { AboutTab } from './AboutTab';
 
-export type SettingsTabKey = 'models' | 'perms' | 'theme' | 'about';
+export type SettingsTabKey = 'models' | 'perms' | 'theme' | 'browser' | 'about';
 
 interface SettingsModalProps {
   open: boolean;
@@ -24,6 +25,7 @@ export function SettingsModal({ open, tab, onTabChange, onClose }: SettingsModal
           { key: 'models', label: '模型配置', children: <ModelsTab /> },
           { key: 'perms', label: '权限规则', children: <PermsTab /> },
           { key: 'theme', label: '主题', children: <ThemeTab /> },
+          { key: 'browser', label: '浏览器', children: <BrowserTab /> },
           { key: 'about', label: '关于', children: <AboutTab /> },
         ]}
       />
